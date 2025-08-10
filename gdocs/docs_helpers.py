@@ -49,8 +49,8 @@ def build_text_style(
         fields.append('fontSize')
     
     if font_family is not None:
-        text_style['fontFamily'] = font_family
-        fields.append('fontFamily')
+        text_style['weightedFontFamily'] = {'fontFamily': font_family}
+        fields.append('weightedFontFamily')
     
     return text_style, fields
 
@@ -68,6 +68,28 @@ def create_insert_text_request(index: int, text: str) -> Dict[str, Any]:
     return {
         'insertText': {
             'location': {'index': index},
+            'text': text
+        }
+    }
+
+def create_insert_text_segment_request(index: int, text: str, segment_id: str) -> Dict[str, Any]:
+    """
+    Create an insertText request for Google Docs API with segmentId (for headers/footers).
+    
+    Args:
+        index: Position to insert text
+        text: Text to insert
+        segment_id: Segment ID (for targeting headers/footers)
+    
+    Returns:
+        Dictionary representing the insertText request with segmentId
+    """
+    return {
+        'insertText': {
+            'location': {
+                'segmentId': segment_id,
+                'index': index
+            },
             'text': text
         }
     }
