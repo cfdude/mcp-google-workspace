@@ -19,6 +19,7 @@ from core.comments import create_comment_tools
 from gdocs.docs_helpers import (
     build_text_style,
     create_insert_text_request,
+    create_insert_text_segment_request,
     create_delete_range_request,
     create_format_text_request,
     create_find_replace_request,
@@ -281,7 +282,7 @@ async def create_doc(
     doc = await asyncio.to_thread(service.documents().create(body={'title': title}).execute)
     doc_id = doc.get('documentId')
     if content:
-        requests = [{'insertText': {'location': {'index': 1}, 'text': content}}]
+        requests = [create_insert_text_request(1, content)]
         await asyncio.to_thread(service.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute)
     link = f"https://docs.google.com/document/d/{doc_id}/edit"
     msg = f"Created Google Doc '{title}' (ID: {doc_id}) for {user_google_email}. Link: {link}"
@@ -869,15 +870,7 @@ async def update_doc_headers_footers(
     # Use different strategies based on whether there's existing content
     if existing_text:
         # Use replaceAllText to replace existing content in the header/footer
-        requests.append({
-            'replaceAllText': {
-                'containsText': {
-                    'text': existing_text,
-                    'matchCase': False
-                },
-                'replaceText': content
-            }
-        })
+        requests.append(create_find_replace_request(existing_text, content, match_case=False))
     else:
         # For empty headers/footers, we need to insert text
         # Get the first valid index position in the header/footer
@@ -886,15 +879,7 @@ async def update_doc_headers_footers(
                 if 'paragraph' in element:
                     start_index = element.get('startIndex', 0)
                     # Insert at the beginning of the paragraph
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'segmentId': section_id,  # Target the specific header/footer
-                                'index': start_index
-                            },
-                            'text': content
-                        }
-                    })
+                    requests.append(create_insert_text_segment_request(start_index, content, section_id))
                     break
     
     # Execute the requests if we have any
