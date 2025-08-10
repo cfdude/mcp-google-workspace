@@ -445,10 +445,19 @@ def require_multiple_services(service_configs: List[Dict[str, Any]]):
         
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Extract user_google_email from the wrapper's arguments
-            bound_args = wrapper_sig.bind(*args, **kwargs)
-            bound_args.apply_defaults()
-            user_google_email = bound_args.arguments.get('user_google_email')
+            # Extract user_google_email - use robust approach that works with injected services
+            user_google_email = None
+            if 'user_google_email' in kwargs:
+                user_google_email = kwargs['user_google_email']
+            else:
+                # Look for user_google_email in positional args using original function signature
+                original_param_names = list(original_sig.parameters.keys())
+                try:
+                    user_email_index = original_param_names.index('user_google_email')
+                    if user_email_index < len(args):
+                        user_google_email = args[user_email_index]
+                except ValueError:
+                    pass
 
             if not user_google_email:
                 raise Exception("user_google_email parameter is required but not found")

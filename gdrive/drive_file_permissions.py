@@ -99,10 +99,8 @@ async def get_drive_file_permissions(
             output_parts.append(f"  Direct Download Link: {web_content_link}")
         
         # Check if file has "anyone with link" permission
-        has_public_link = any(
-            p.get('type') == 'anyone' and p.get('role') in ['reader', 'writer', 'commenter']
-            for p in permissions
-        )
+        from gdrive.drive_helpers import check_public_link_permission
+        has_public_link = check_public_link_permission(permissions)
         
         if has_public_link:
             output_parts.extend([
@@ -185,10 +183,8 @@ async def check_drive_file_public_access(
     )
     
     permissions = file_metadata.get('permissions', [])
-    has_public_link = any(
-        p.get('type') == 'anyone' and p.get('role') in ['reader', 'writer', 'commenter']
-        for p in permissions
-    )
+    from gdrive.drive_helpers import check_public_link_permission
+    has_public_link = check_public_link_permission(permissions)
     
     output_parts.extend([
         f"File: {file_metadata['name']}",
@@ -199,23 +195,15 @@ async def check_drive_file_public_access(
     ])
     
     if has_public_link:
+        from gdrive.drive_helpers import get_drive_image_url
         output_parts.extend([
             "✅ PUBLIC ACCESS ENABLED - This file can be inserted into Google Docs",
-            f"Share URL: https://drive.google.com/file/d/{file_id}/view?usp=sharing",
-            "",
-            "You can use this file with insert_doc_image_url like this:",
-            f"  image_url: https://drive.google.com/uc?export=view&id={file_id}"
+            f"Use with insert_doc_image_url: {get_drive_image_url(file_id)}"
         ])
     else:
         output_parts.extend([
-            "❌ NO PUBLIC ACCESS - This file cannot be inserted into Google Docs",
-            "",
-            "To enable public access:",
-            "1. Open the file in Google Drive",
-            "2. Click Share button",
-            "3. Under 'General access', change from 'Restricted' to 'Anyone with the link'",
-            "4. Set permission to 'Viewer'",
-            "5. Click Done"
+            "❌ NO PUBLIC ACCESS - Cannot insert into Google Docs",
+            "Fix: Drive → Share → 'Anyone with the link' → 'Viewer'"
         ])
     
     return "\n".join(output_parts)

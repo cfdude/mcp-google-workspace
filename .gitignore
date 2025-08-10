@@ -2,8 +2,6 @@
 __pycache__/
 *.py[cod]
 *.so
-.mcp.json
-claude.md
 
 # ---- Packaging ---------------------------------------------------------
 *.egg-info/
@@ -23,7 +21,6 @@ venv/
 # ---- Secrets -----------------------------------------------------------
 client_secret.json
 .mcp.json
-CLAUDE.md
 
 # ---- Logs --------------------------------------------------------------
 mcp_server_debug.log

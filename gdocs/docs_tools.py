@@ -28,8 +28,6 @@ from gdocs.docs_helpers import (
     create_insert_image_request,
     create_bullet_list_request,
     validate_operation,
-    extract_document_text_simple,
-    calculate_text_indices,
 )
 
 # Import document structure and table utilities
@@ -713,37 +711,17 @@ async def insert_doc_image_from_drive(
         logger.warning(f"File '{drive_file_name}' has MIME type '{mime_type}' which may not be an image")
     
     # Check permissions to see if file has "anyone with link" permission
+    from gdrive.drive_helpers import check_public_link_permission
     permissions = file_info.get('permissions', [])
-    has_public_link = any(
-        p.get('type') == 'anyone' and p.get('role') in ['reader', 'writer', 'commenter']
-        for p in permissions
-    )
+    has_public_link = check_public_link_permission(permissions)
     
     if not has_public_link:
-        # File is not publicly accessible - provide helpful error message
-        error_msg = [
-            f"❌ **Permission Error**: Cannot insert image '{file_name}' into Google Doc",
-            "",
-            "**Issue**: The image is not shared with 'Anyone with the link'",
-            "The Google Docs API requires images to be publicly accessible to insert them.",
-            "",
-            "**How to fix this:**",
-            "1. Go to your Google Drive: https://drive.google.com",
-            f"2. Find the file '{file_name}'",
-            "3. Right-click on the file and select 'Share'",
-            "4. Under 'General access', change from 'Restricted' to 'Anyone with the link'",
-            "5. Set the permission to 'Viewer'",
-            "6. Click 'Done'",
-            "",
-            f"**Direct link to file**: https://drive.google.com/file/d/{file_id}/view",
-            "",
-            "After changing the permissions, try inserting the image again."
-        ]
-        return "\n".join(error_msg)
+        from gdrive.drive_helpers import format_public_sharing_error
+        return format_public_sharing_error(file_name, file_id)
     
     # File has public access - proceed with insertion
-    # Use the correct Drive URL format for publicly shared images
-    image_uri = f"https://drive.google.com/uc?export=view&id={file_id}"
+    from gdrive.drive_helpers import get_drive_image_url
+    image_uri = get_drive_image_url(file_id)
     
     # Use helper function to create request
     request = create_insert_image_request(index, image_uri, width, height)
@@ -767,26 +745,7 @@ async def insert_doc_image_from_drive(
     except Exception as e:
         error_str = str(e)
         if "publicly accessible" in error_str or "forbidden" in error_str.lower():
-            # Even though we checked permissions, the API might still reject it
-            # This can happen if the sharing was just changed
-            error_msg = [
-                f"❌ **API Error**: Failed to insert image '{file_name}'",
-                "",
-                f"Error details: {error_str}",
-                "",
-                "**Possible causes:**",
-                "1. The sharing permissions were recently changed and haven't propagated yet",
-                "2. The file is in a shared drive with restricted access",
-                "3. The image format is not supported",
-                "",
-                "**Try these solutions:**",
-                "1. Wait a few seconds and try again",
-                "2. Verify the file shows 'Anyone with the link' in Google Drive sharing settings",
-                f"3. Try using the direct URL with insert_doc_image_url: https://drive.google.com/uc?export=view&id={file_id}",
-                "",
-                f"**File link**: https://drive.google.com/file/d/{file_id}/view"
-            ]
-            return "\n".join(error_msg)
+            return f"❌ API Error: Drive image '{file_name}' access denied despite public sharing. May need propagation time or use insert_doc_image_url with: {get_drive_image_url(file_id)}"
         else:
             # Some other error occurred
             return f"❌ Error inserting image '{file_name}': {e}"
