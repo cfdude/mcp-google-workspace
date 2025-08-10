@@ -431,22 +431,24 @@ def require_multiple_services(service_configs: List[Dict[str, Any]]):
             # Both services are automatically injected
     """
     def decorator(func: Callable) -> Callable:
+        # Inspect the original function signature
+        original_sig = inspect.signature(func)
+        params = list(original_sig.parameters.values())
+        
+        # Create list of service parameter names that will be injected
+        service_param_names = [config["param_name"] for config in service_configs]
+        
+        # Filter out the service parameters from the original signature
+        # to create the wrapper signature that MCP will see
+        wrapper_params = [p for p in params if p.name not in service_param_names]
+        wrapper_sig = original_sig.replace(parameters=wrapper_params)
+        
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Extract user_google_email
-            sig = inspect.signature(func)
-            param_names = list(sig.parameters.keys())
-
-            user_google_email = None
-            if 'user_google_email' in kwargs:
-                user_google_email = kwargs['user_google_email']
-            else:
-                try:
-                    user_email_index = param_names.index('user_google_email')
-                    if user_email_index < len(args):
-                        user_google_email = args[user_email_index]
-                except ValueError:
-                    pass
+            # Extract user_google_email from the wrapper's arguments
+            bound_args = wrapper_sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            user_google_email = bound_args.arguments.get('user_google_email')
 
             if not user_google_email:
                 raise Exception("user_google_email parameter is required but not found")
@@ -528,6 +530,9 @@ def require_multiple_services(service_configs: List[Dict[str, Any]]):
                 error_message = _handle_token_refresh_error(e, user_google_email, "Multiple Services")
                 raise Exception(error_message)
 
+        # Set the wrapper's signature to the one without service parameters
+        # This is critical for MCP compatibility
+        wrapper.__signature__ = wrapper_sig
         return wrapper
     return decorator
 
