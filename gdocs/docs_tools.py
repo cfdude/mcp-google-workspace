@@ -17,17 +17,14 @@ from core.comments import create_comment_tools
 
 # Import helper functions for document operations
 from gdocs.docs_helpers import (
-    build_text_style,
     create_insert_text_request,
-    create_insert_text_segment_request,
     create_delete_range_request,
     create_format_text_request,
     create_find_replace_request,
     create_insert_table_request,
     create_insert_page_break_request,
     create_insert_image_request,
-    create_bullet_list_request,
-    validate_operation
+    create_bullet_list_request
 )
 
 # Import document structure and table utilities

@@ -48,6 +48,8 @@ docs:
     - insert_doc_elements
   complete:
     - insert_doc_image
+    - insert_doc_image_from_drive
+    - insert_doc_image_url
     - update_doc_headers_footers
     - batch_update_doc
     - inspect_doc_structure
