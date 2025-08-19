@@ -3,6 +3,7 @@ Google Drive Helper Functions
 
 Shared utilities for Google Drive operations including permission checking.
 """
+
 import re
 from typing import List, Dict, Any, Optional
 
@@ -51,6 +52,7 @@ def get_drive_image_url(file_id: str) -> str:
     Returns:
         str: URL for embedding Drive images
     """
+
     return f"https://drive.google.com/uc?export=view&id={file_id}"
 
 
