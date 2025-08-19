@@ -567,12 +567,12 @@ def require_multiple_services(service_configs: List[Dict[str, Any]]):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             # Extract user_google_email - use robust approach that works with injected services
+            original_param_names = list(original_sig.parameters.keys())
             user_google_email = None
             if "user_google_email" in kwargs:
                 user_google_email = kwargs["user_google_email"]
             else:
                 # Look for user_google_email in positional args using original function signature
-                original_param_names = list(original_sig.parameters.keys())
                 try:
                     user_email_index = original_param_names.index('user_google_email')
                     if user_email_index < len(args):
