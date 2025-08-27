@@ -33,6 +33,10 @@ class OAuthConfig:
         # OAuth client configuration
         self.client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
         self.client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+        
+        # OAuth client type for PKCE-only authentication (security hardening)
+        self.client_type = os.getenv("GOOGLE_OAUTH_CLIENT_TYPE", "web").lower()
+        self.is_public_client = self.client_type in ["uwp", "android", "ios", "native", "desktop"]
 
         # OAuth 2.1 configuration
         self.oauth21_enabled = os.getenv("MCP_ENABLE_OAUTH21", "false").lower() == "true"
@@ -115,6 +119,11 @@ class OAuthConfig:
         Returns:
             True if OAuth client credentials are available
         """
+        # For public clients (UWP, Android, etc.), only client_id is required
+        if self.is_public_client:
+            return bool(self.client_id)
+        
+        # For confidential clients (web, desktop with secret), both are required
         return bool(self.client_id and self.client_secret)
 
     def get_oauth_base_url(self) -> str:
@@ -144,6 +153,38 @@ class OAuthConfig:
         allowed_uris = self.get_redirect_uris()
         return uri in allowed_uris
 
+    def is_secretless_mode(self) -> bool:
+        """
+        Check if running in secretless mode (PKCE-only authentication).
+        
+        Returns:
+            True if using a public client type that doesn't require client_secret storage
+        """
+        return self.is_public_client
+
+    def requires_pkce(self) -> bool:
+        """
+        Check if PKCE is required for this client configuration.
+        
+        Returns:
+            True if PKCE is required (OAuth 2.1 mode or public client)
+        """
+        return self.oauth21_enabled or self.is_public_client
+
+    def get_client_type_description(self) -> str:
+        """
+        Get human-readable description of the client type.
+        
+        Returns:
+            Description of the current client type and authentication mode
+        """
+        if self.is_secretless_mode():
+            return f"Public client ({self.client_type.upper()}) - PKCE-only authentication"
+        elif self.is_public_client:
+            return f"Public client ({self.client_type.upper()}) - misconfigured (has client_secret)"
+        else:
+            return f"Confidential client ({self.client_type.upper()}) - traditional OAuth with client_secret"
+
     def get_environment_summary(self) -> dict:
         """
         Get a summary of the current OAuth configuration.
@@ -157,6 +198,10 @@ class OAuthConfig:
             "effective_oauth_url": self.get_oauth_base_url(),
             "redirect_uri": self.redirect_uri,
             "client_configured": bool(self.client_id),
+            "client_type": self.client_type,
+            "is_public_client": self.is_public_client,
+            "secretless_mode": self.is_secretless_mode(),
+            "client_description": self.get_client_type_description(),
             "oauth21_enabled": self.oauth21_enabled,
             "pkce_required": self.pkce_required,
             "transport_mode": self._transport_mode,
@@ -350,3 +395,27 @@ def get_oauth_redirect_uri() -> str:
 def is_stateless_mode() -> bool:
     """Check if stateless mode is enabled."""
     return get_oauth_config().stateless_mode
+
+def is_secretless_mode() -> bool:
+    """Check if running in secretless mode (PKCE-only authentication)."""
+    return get_oauth_config().is_secretless_mode()
+
+
+def is_public_client() -> bool:
+    """Check if the client is configured as a public client."""
+    return get_oauth_config().is_public_client
+
+
+def requires_pkce() -> bool:
+    """Check if PKCE is required for this client configuration."""
+    return get_oauth_config().requires_pkce()
+
+
+def get_client_type() -> str:
+    """Get the OAuth client type."""
+    return get_oauth_config().client_type
+
+
+def get_client_type_description() -> str:
+    """Get human-readable description of the client type."""
+    return get_oauth_config().get_client_type_description()

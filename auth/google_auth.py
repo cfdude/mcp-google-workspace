@@ -1,10 +1,13 @@
 # auth/google_auth.py
 
 import asyncio
+import base64
+import hashlib
 import json
 import jwt
 import logging
 import os
+import secrets
 
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -132,7 +135,7 @@ def save_credentials_to_session(session_id: str, credentials: Credentials):
             refresh_token=credentials.refresh_token,
             token_uri=credentials.token_uri,
             client_id=credentials.client_id,
-            client_secret=credentials.client_secret,
+            client_secret=getattr(credentials, 'client_secret', None),
             scopes=credentials.scopes,
             expiry=credentials.expiry,
             mcp_session_id=session_id
@@ -157,14 +160,31 @@ def load_credentials_from_session(session_id: str) -> Optional[Credentials]:
     return credentials
 
 
+def generate_code_verifier() -> str:
+    """Generate a code verifier for PKCE as per RFC 7636."""
+    # Code verifier: high-entropy cryptographic random string using unreserved characters
+    # Length between 43 and 128 characters (we'll use 128 for maximum entropy)
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(96)).decode('utf-8').rstrip('=')
+    return code_verifier
+
+
+def generate_code_challenge(code_verifier: str) -> str:
+    """Generate a code challenge from code verifier using SHA256 method."""
+    # Code challenge: Base64url encoding of SHA256(code_verifier)
+    digest = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).decode('utf-8').rstrip('=')
+    return code_challenge
+
+
 def load_client_secrets_from_env() -> Optional[Dict[str, Any]]:
     """
     Loads the client secrets from environment variables.
 
     Environment variables used:
         - GOOGLE_OAUTH_CLIENT_ID: OAuth 2.0 client ID
-        - GOOGLE_OAUTH_CLIENT_SECRET: OAuth 2.0 client secret
+        - GOOGLE_OAUTH_CLIENT_SECRET: OAuth 2.0 client secret (optional for public clients)
         - GOOGLE_OAUTH_REDIRECT_URI: (optional) OAuth redirect URI
+        - GOOGLE_OAUTH_CLIENT_TYPE: OAuth client type (optional, defaults to 'web')
 
     Returns:
         Client secrets configuration dict compatible with Google OAuth library,
@@ -173,28 +193,53 @@ def load_client_secrets_from_env() -> Optional[Dict[str, Any]]:
     client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
     redirect_uri = os.getenv("GOOGLE_OAUTH_REDIRECT_URI")
+    
+    # Get OAuth configuration to check if we're in public client mode
+    oauth_config = get_oauth_config()
+    
+    # For public clients (UWP, Android, etc.), client_secret is not required
+    if oauth_config.is_public_client:
+        if client_id:
+            # Create config structure for public clients (no client_secret)
+            web_config = {
+                "client_id": client_id,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            }
 
-    if client_id and client_secret:
-        # Create config structure that matches Google client secrets format
-        web_config = {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        }
+            # Add redirect_uri if provided via environment variable
+            if redirect_uri:
+                web_config["redirect_uris"] = [redirect_uri]
 
-        # Add redirect_uri if provided via environment variable
-        if redirect_uri:
-            web_config["redirect_uris"] = [redirect_uri]
+            # Return the full config structure expected by Google OAuth library
+            config = {"web": web_config}
 
-        # Return the full config structure expected by Google OAuth library
-        config = {"web": web_config}
+            logger.info(f"Loaded OAuth client credentials from environment variables (public client type: {oauth_config.client_type})")
+            return config
+    else:
+        # For confidential clients (web, desktop with secret), both client_id and client_secret are required
+        if client_id and client_secret:
+            # Create config structure that matches Google client secrets format
+            web_config = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            }
 
-        logger.info("Loaded OAuth client credentials from environment variables")
-        return config
+            # Add redirect_uri if provided via environment variable
+            if redirect_uri:
+                web_config["redirect_uris"] = [redirect_uri]
 
-    logger.debug("OAuth client credentials not found in environment variables")
+            # Return the full config structure expected by Google OAuth library
+            config = {"web": web_config}
+
+            logger.info("Loaded OAuth client credentials from environment variables (confidential client)")
+            return config
+
+    logger.debug("OAuth client credentials not found in environment variables or incomplete for client type")
     return None
 
 
@@ -268,6 +313,8 @@ def create_oauth_flow(
     scopes: List[str], redirect_uri: str, state: Optional[str] = None
 ) -> Flow:
     """Creates an OAuth flow using environment variables or client secrets file."""
+    oauth_config = get_oauth_config()
+    
     # Try environment variables first
     env_config = load_client_secrets_from_env()
     if env_config:
@@ -276,6 +323,21 @@ def create_oauth_flow(
             env_config, scopes=scopes, redirect_uri=redirect_uri, state=state
         )
         logger.debug("Created OAuth flow from environment variables")
+        
+        # Add PKCE parameters for public clients (security hardening)
+        if oauth_config.is_public_client:
+            code_verifier = generate_code_verifier()
+            code_challenge = generate_code_challenge(code_verifier)
+            
+            # Store code_verifier in the flow for later use during token exchange
+            flow.code_verifier = code_verifier
+            
+            # Add PKCE parameters to authorization URL
+            flow.oauth2session.code_challenge = code_challenge
+            flow.oauth2session.code_challenge_method = 'S256'
+            
+            logger.debug(f"Added PKCE parameters for public client type: {oauth_config.client_type}")
+        
         return flow
 
     # Fall back to file-based config
@@ -293,6 +355,21 @@ def create_oauth_flow(
     logger.debug(
         f"Created OAuth flow from client secrets file: {CONFIG_CLIENT_SECRETS_PATH}"
     )
+    
+    # Add PKCE parameters for public clients even when using file-based config
+    if oauth_config.is_public_client:
+        code_verifier = generate_code_verifier()
+        code_challenge = generate_code_challenge(code_verifier)
+        
+        # Store code_verifier in the flow for later use during token exchange
+        flow.code_verifier = code_verifier
+        
+        # Add PKCE parameters to authorization URL
+        flow.oauth2session.code_challenge = code_challenge
+        flow.oauth2session.code_challenge_method = 'S256'
+        
+        logger.debug(f"Added PKCE parameters for public client type: {oauth_config.client_type}")
+    
     return flow
 
 
@@ -448,7 +525,13 @@ def handle_auth_callback(
 
         # Exchange the authorization code for credentials
         # Note: fetch_token will use the redirect_uri configured in the flow
-        flow.fetch_token(authorization_response=authorization_response)
+        # For PKCE (public clients), include code_verifier if available
+        fetch_token_kwargs = {"authorization_response": authorization_response}
+        if hasattr(flow, 'code_verifier') and flow.code_verifier:
+            fetch_token_kwargs["code_verifier"] = flow.code_verifier
+            logger.debug("Using PKCE code_verifier for token exchange (secretless mode)")
+        
+        flow.fetch_token(**fetch_token_kwargs)
         credentials = flow.credentials
         logger.info("Successfully exchanged authorization code for tokens.")
 
@@ -473,7 +556,7 @@ def handle_auth_callback(
             refresh_token=credentials.refresh_token,
             token_uri=credentials.token_uri,
             client_id=credentials.client_id,
-            client_secret=credentials.client_secret,
+            client_secret=getattr(credentials, 'client_secret', None),
             scopes=credentials.scopes,
             expiry=credentials.expiry,
             mcp_session_id=session_id,
@@ -682,7 +765,7 @@ def get_credentials(
                     refresh_token=credentials.refresh_token,
                     token_uri=credentials.token_uri,
                     client_id=credentials.client_id,
-                    client_secret=credentials.client_secret,
+                    client_secret=getattr(credentials, 'client_secret', None),
                     scopes=credentials.scopes,
                     expiry=credentials.expiry,
                     mcp_session_id=session_id,
