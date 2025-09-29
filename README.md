@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/workspace-mcp.svg)](https://pypi.org/project/workspace-mcp/)
-[![PyPI Downloads](https://static.pepy.tech/badge/workspace-mcp/month)](https://pepy.tech/projects/workspace-mcp)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/workspace-mcp?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=BLUE&left_text=downloads)](https://pepy.tech/projects/workspace-mcp)
 [![Website](https://img.shields.io/badge/Website-workspacemcp.com-green.svg)](https://workspacemcp.com)
 
 *Full natural language control over Google Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks, and Chat through all MCP clients, AI assistants and developer tools.*
@@ -650,7 +650,7 @@ cp .env.oauth21 .env
 
 **Loading Priority**
 1. Environment variables (`export VAR=value`)
-2. `.env` file in project root
+2. `.env` file in project root (warning - if you run via `uvx` rather than `uv run` from the repo directory, you are spawning a standalone process not associated with your clone of the repo and it will not find your .env file without specifying it directly) 
 3. `client_secret.json` via `GOOGLE_CLIENT_SECRET_PATH`
 4. Default `client_secret.json` in project root
 
@@ -743,6 +743,7 @@ cp .env.oauth21 .env
 | `update_doc_headers_footers` | Complete | Modify headers and footers |
 | `batch_update_doc` | Complete | Execute multiple operations |
 | `inspect_doc_structure` | Complete | Analyze document structure |
+| `export_doc_to_pdf` | Extended | Export document to PDF |
 | `create_table_with_data` | Complete | Create data tables |
 | `debug_table_structure` | Complete | Debug table issues |
 | `*_document_comments` | Complete | Read, Reply, Create, Resolve |
