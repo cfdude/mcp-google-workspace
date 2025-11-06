@@ -18,6 +18,14 @@ from google.oauth2.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
+# Import persistent OAuth state store
+try:
+    from auth.oauth_state_store import get_persistent_oauth_state_store
+    _use_persistent_state_store = True
+except ImportError:
+    _use_persistent_state_store = False
+    logger.warning("Persistent OAuth state store not available - using in-memory storage only")
+
 
 def _normalize_expiry_to_naive_utc(expiry: Optional[Any]) -> Optional[datetime]:
     """
@@ -48,7 +56,6 @@ def _normalize_expiry_to_naive_utc(expiry: Optional[Any]) -> Optional[datetime]:
 
     logger.debug("Unsupported expiry type '%s' (%s)", expiry, type(expiry))
     return None
-
 
 # Context variable to store the current session information
 _current_session_context: contextvars.ContextVar[Optional['SessionContext']] = contextvars.ContextVar(
@@ -217,6 +224,21 @@ class OAuth21SessionStore:
         if expires_in_seconds < 0:
             raise ValueError("expires_in_seconds must be non-negative")
 
+        # Use persistent store if available (critical for Claude Desktop account switching)
+        if _use_persistent_state_store:
+            try:
+                persistent_store = get_persistent_oauth_state_store()
+                persistent_store.store_oauth_state(state, session_id, expires_in_seconds)
+                logger.debug(
+                    "Stored OAuth state %s in persistent storage",
+                    state[:8] if len(state) > 8 else state,
+                )
+                return  # Only use persistent storage, no need for in-memory
+            except Exception as e:
+                logger.error(f"Failed to store OAuth state in persistent storage: {e}")
+                # Fall through to in-memory storage as backup
+
+        # Fallback: in-memory storage (will be lost on process restart)
         with self._lock:
             self._cleanup_expired_oauth_states_locked()
             now = datetime.now(timezone.utc)
@@ -227,7 +249,7 @@ class OAuth21SessionStore:
                 "created_at": now,
             }
             logger.debug(
-                "Stored OAuth state %s (expires at %s)",
+                "Stored OAuth state %s in memory (expires at %s)",
                 state[:8] if len(state) > 8 else state,
                 expiry.isoformat(),
             )
@@ -253,6 +275,24 @@ class OAuth21SessionStore:
         if not state:
             raise ValueError("Missing OAuth state parameter")
 
+        # Use persistent store if available (critical for Claude Desktop account switching)
+        if _use_persistent_state_store:
+            try:
+                persistent_store = get_persistent_oauth_state_store()
+                state_info = persistent_store.validate_and_consume_oauth_state(state, session_id)
+                logger.debug(
+                    "Validated OAuth state %s from persistent storage",
+                    state[:8] if len(state) > 8 else state,
+                )
+                return state_info
+            except ValueError:
+                # State validation failed in persistent store - re-raise
+                raise
+            except Exception as e:
+                logger.error(f"Failed to validate OAuth state from persistent storage: {e}")
+                # Fall through to in-memory validation as backup
+
+        # Fallback: in-memory validation (will fail if process restarted)
         with self._lock:
             self._cleanup_expired_oauth_states_locked()
             state_info = self._oauth_states.get(state)
@@ -275,7 +315,7 @@ class OAuth21SessionStore:
             # State is valid – consume it to prevent reuse
             del self._oauth_states[state]
             logger.debug(
-                "Validated OAuth state %s",
+                "Validated OAuth state %s from memory",
                 state[:8] if len(state) > 8 else state,
             )
             return state_info
