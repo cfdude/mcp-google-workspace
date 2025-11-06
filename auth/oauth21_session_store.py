@@ -18,6 +18,14 @@ from google.oauth2.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
+# Import persistent OAuth state store
+try:
+    from auth.oauth_state_store import get_persistent_oauth_state_store
+    _use_persistent_state_store = True
+except ImportError:
+    _use_persistent_state_store = False
+    logger.warning("Persistent OAuth state store not available - using in-memory storage only")
+
 # Context variable to store the current session information
 _current_session_context: contextvars.ContextVar[Optional['SessionContext']] = contextvars.ContextVar(
     'current_session_context',
