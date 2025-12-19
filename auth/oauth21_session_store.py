@@ -21,10 +21,13 @@ logger = logging.getLogger(__name__)
 # Import persistent OAuth state store
 try:
     from auth.oauth_state_store import get_persistent_oauth_state_store
+
     _use_persistent_state_store = True
 except ImportError:
     _use_persistent_state_store = False
-    logger.warning("Persistent OAuth state store not available - using in-memory storage only")
+    logger.warning(
+        "Persistent OAuth state store not available - using in-memory storage only"
+    )
 
 
 def _normalize_expiry_to_naive_utc(expiry: Optional[Any]) -> Optional[datetime]:
@@ -58,6 +61,7 @@ def _normalize_expiry_to_naive_utc(expiry: Optional[Any]) -> Optional[datetime]:
 
     logger.debug("Unsupported expiry type '%s' (%s)", expiry, type(expiry))
     return None
+
 
 # Context variable to store the current session information
 _current_session_context: contextvars.ContextVar[Optional["SessionContext"]] = (
@@ -238,7 +242,9 @@ class OAuth21SessionStore:
         if _use_persistent_state_store:
             try:
                 persistent_store = get_persistent_oauth_state_store()
-                persistent_store.store_oauth_state(state, session_id, expires_in_seconds)
+                persistent_store.store_oauth_state(
+                    state, session_id, expires_in_seconds
+                )
                 logger.debug(
                     "Stored OAuth state %s in persistent storage",
                     state[:8] if len(state) > 8 else state,
@@ -289,7 +295,9 @@ class OAuth21SessionStore:
         if _use_persistent_state_store:
             try:
                 persistent_store = get_persistent_oauth_state_store()
-                state_info = persistent_store.validate_and_consume_oauth_state(state, session_id)
+                state_info = persistent_store.validate_and_consume_oauth_state(
+                    state, session_id
+                )
                 logger.debug(
                     "Validated OAuth state %s from persistent storage",
                     state[:8] if len(state) > 8 else state,
@@ -299,7 +307,9 @@ class OAuth21SessionStore:
                 # State validation failed in persistent store - re-raise
                 raise
             except Exception as e:
-                logger.error(f"Failed to validate OAuth state from persistent storage: {e}")
+                logger.error(
+                    f"Failed to validate OAuth state from persistent storage: {e}"
+                )
                 # Fall through to in-memory validation as backup
 
         # Fallback: in-memory validation (will fail if process restarted)

@@ -38,7 +38,9 @@ class PersistentOAuthStateStore:
             if not base_dir:
                 home_dir = os.path.expanduser("~")
                 if home_dir and home_dir != "~":
-                    base_dir = os.path.join(home_dir, ".google_workspace_mcp", "credentials")
+                    base_dir = os.path.join(
+                        home_dir, ".google_workspace_mcp", "credentials"
+                    )
                 else:
                     base_dir = os.path.join(os.getcwd(), ".credentials")
 
@@ -51,7 +53,9 @@ class PersistentOAuthStateStore:
 
         self.state_file_path = state_file_path
         self._lock = RLock()
-        logger.info(f"PersistentOAuthStateStore initialized with file: {state_file_path}")
+        logger.info(
+            f"PersistentOAuthStateStore initialized with file: {state_file_path}"
+        )
 
     def _load_states(self) -> Dict[str, Dict[str, Any]]:
         """Load states from disk. Caller must hold lock."""
@@ -65,9 +69,13 @@ class PersistentOAuthStateStore:
             # Convert ISO strings back to datetime objects
             for state_data in data.values():
                 if "expires_at" in state_data and state_data["expires_at"]:
-                    state_data["expires_at"] = datetime.fromisoformat(state_data["expires_at"])
+                    state_data["expires_at"] = datetime.fromisoformat(
+                        state_data["expires_at"]
+                    )
                 if "created_at" in state_data and state_data["created_at"]:
-                    state_data["created_at"] = datetime.fromisoformat(state_data["created_at"])
+                    state_data["created_at"] = datetime.fromisoformat(
+                        state_data["created_at"]
+                    )
 
             logger.debug(f"Loaded {len(data)} OAuth states from disk")
             return data
@@ -83,10 +91,20 @@ class PersistentOAuthStateStore:
             serializable_states = {}
             for state, state_data in states.items():
                 serializable_data = state_data.copy()
-                if "expires_at" in serializable_data and serializable_data["expires_at"]:
-                    serializable_data["expires_at"] = serializable_data["expires_at"].isoformat()
-                if "created_at" in serializable_data and serializable_data["created_at"]:
-                    serializable_data["created_at"] = serializable_data["created_at"].isoformat()
+                if (
+                    "expires_at" in serializable_data
+                    and serializable_data["expires_at"]
+                ):
+                    serializable_data["expires_at"] = serializable_data[
+                        "expires_at"
+                    ].isoformat()
+                if (
+                    "created_at" in serializable_data
+                    and serializable_data["created_at"]
+                ):
+                    serializable_data["created_at"] = serializable_data[
+                        "created_at"
+                    ].isoformat()
                 serializable_states[state] = serializable_data
 
             with open(self.state_file_path, "w") as f:
@@ -97,7 +115,9 @@ class PersistentOAuthStateStore:
         except IOError as e:
             logger.error(f"Error saving OAuth states to {self.state_file_path}: {e}")
 
-    def _cleanup_expired_states(self, states: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _cleanup_expired_states(
+        self, states: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Remove expired states. Caller must hold lock."""
         now = datetime.now(timezone.utc)
         cleaned_states = {}
@@ -192,7 +212,9 @@ class PersistentOAuthStateStore:
             state_info = states.get(state)
 
             if not state_info:
-                logger.error("SECURITY: OAuth callback received unknown or expired state")
+                logger.error(
+                    "SECURITY: OAuth callback received unknown or expired state"
+                )
                 raise ValueError("Invalid or expired OAuth state parameter")
 
             # Validate session binding if present
