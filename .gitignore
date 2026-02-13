@@ -1,3 +1,9 @@
+# ---- Local deployment --------------------------------------------------
+certs/
+ecosystem.config.cjs
+Caddyfile
+logs/
+
 # ---- Python artefacts --------------------------------------------------
 __pycache__/
 *.py[cod]
