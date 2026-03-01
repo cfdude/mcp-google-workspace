@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 from typing import List, Optional
@@ -6,6 +7,7 @@ from importlib import metadata
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.responses import Response
 from starlette.middleware import Middleware
 
 from fastmcp import FastMCP
@@ -38,11 +40,39 @@ _legacy_callback_registered = False
 session_middleware = Middleware(MCPSessionMiddleware)
 
 
+def _compute_scope_fingerprint() -> str:
+    """Compute a short hash of the current scope configuration for cache-busting."""
+    scopes_str = ",".join(sorted(get_current_scopes()))
+    return hashlib.sha256(scopes_str.encode()).hexdigest()[:12]
+
+
+def _wrap_well_known_endpoint(endpoint, etag: str):
+    """Wrap a well-known metadata endpoint to prevent browser caching.
+
+    The MCP SDK hardcodes ``Cache-Control: public, max-age=3600`` on discovery
+    responses.  When the server restarts with different ``--permissions`` or
+    ``--read-only`` flags, browsers / MCP clients serve stale metadata that
+    advertises the wrong scopes, causing OAuth to silently fail.
+
+    The wrapper overrides the header to ``no-store`` and adds an ``ETag``
+    derived from the current scope set so intermediary caches that ignore
+    ``no-store`` still see a fingerprint change.
+    """
+
+    async def _no_cache_endpoint(request: Request) -> Response:
+        response = await endpoint(request)
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["ETag"] = etag
+        return response
+
+    return _no_cache_endpoint
+
+
 # Custom FastMCP that adds secure middleware stack for OAuth 2.1
 class SecureFastMCP(FastMCP):
-    def streamable_http_app(self) -> "Starlette":
+    def http_app(self, **kwargs) -> "Starlette":
         """Override to add secure middleware stack for OAuth 2.1."""
-        app = super().streamable_http_app()
+        app = super().http_app(**kwargs)
 
         # Add middleware in order (first added = outermost layer)
         # Session Management - extracts session info for MCP context
@@ -387,14 +417,18 @@ def configure_server_for_http():
                     "OAuth 2.1 enabled using FastMCP GoogleProvider with protocol-level auth"
                 )
 
-                # Explicitly mount well-known routes from the OAuth provider
-                # These should be auto-mounted but we ensure they're available
+                # Mount well-known routes with cache-busting headers.
+                # The MCP SDK hardcodes Cache-Control: public, max-age=3600
+                # on discovery responses which causes stale-scope bugs when
+                # the server is restarted with a different --permissions config.
                 try:
+                    scope_etag = f'"{_compute_scope_fingerprint()}"'
                     well_known_routes = provider.get_well_known_routes()
                     for route in well_known_routes:
                         logger.info(f"Mounting OAuth well-known route: {route.path}")
+                        wrapped = _wrap_well_known_endpoint(route.endpoint, scope_etag)
                         server.custom_route(route.path, methods=list(route.methods))(
-                            route.endpoint
+                            wrapped
                         )
                 except Exception as e:
                     logger.warning(f"Could not mount well-known routes: {e}")
@@ -438,10 +472,11 @@ async def health_check(request: Request):
 
 
 @server.custom_route("/attachments/{file_id}", methods=["GET"])
-async def serve_attachment(file_id: str):
+async def serve_attachment(request: Request):
     """Serve a stored attachment file."""
     from core.attachment_storage import get_attachment_storage
 
+    file_id = request.path_params["file_id"]
     storage = get_attachment_storage()
     metadata = storage.get_attachment_metadata(file_id)
 

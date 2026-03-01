@@ -19,9 +19,10 @@ from email import encoders
 from email.utils import formataddr
 
 from pydantic import Field
+from googleapiclient.errors import HttpError
 
 from auth.service_decorator import require_google_service
-from core.utils import handle_http_errors, validate_file_path
+from core.utils import handle_http_errors, validate_file_path, UserInputError
 from core.server import server
 from auth.scopes import (
     GMAIL_SEND_SCOPE,
@@ -172,6 +173,74 @@ def _format_body_content(text_body: str, html_body: str) -> str:
         return "[No readable content found]"
 
 
+def _append_signature_to_body(
+    body: str, body_format: Literal["plain", "html"], signature_html: str
+) -> str:
+    """Append a Gmail signature to the outgoing body, preserving body format."""
+    if not signature_html or not signature_html.strip():
+        return body
+
+    if body_format == "html":
+        separator = "<br><br>" if body.strip() else ""
+        return f"{body}{separator}{signature_html}"
+
+    signature_text = _html_to_text(signature_html).strip()
+    if not signature_text:
+        return body
+    separator = "\n\n" if body.strip() else ""
+    return f"{body}{separator}{signature_text}"
+
+
+async def _get_send_as_signature_html(service, from_email: Optional[str] = None) -> str:
+    """
+    Fetch signature HTML from Gmail send-as settings.
+
+    Returns empty string when the account has no signature configured or the
+    OAuth token cannot access settings endpoints.
+    """
+    try:
+        response = await asyncio.to_thread(
+            service.users().settings().sendAs().list(userId="me").execute
+        )
+    except HttpError as e:
+        status = getattr(getattr(e, "resp", None), "status", None)
+        if status in {401, 403}:
+            logger.info(
+                "Skipping Gmail signature fetch: missing auth/scope for settings endpoint."
+            )
+            return ""
+        logger.warning(f"Failed to fetch Gmail send-as signatures: {e}")
+        return ""
+    except Exception as e:
+        logger.warning(f"Failed to fetch Gmail send-as signatures: {e}")
+        return ""
+
+    send_as_entries = response.get("sendAs", [])
+    if not send_as_entries:
+        return ""
+
+    if from_email:
+        from_email_normalized = from_email.strip().lower()
+        for entry in send_as_entries:
+            if entry.get("sendAsEmail", "").strip().lower() == from_email_normalized:
+                return entry.get("signature", "") or ""
+
+    for entry in send_as_entries:
+        if entry.get("isPrimary"):
+            return entry.get("signature", "") or ""
+
+    return send_as_entries[0].get("signature", "") or ""
+
+
+def _format_attachment_result(attached_count: int, requested_count: int) -> str:
+    """Format attachment result message for user-facing responses."""
+    if requested_count <= 0:
+        return ""
+    if attached_count == requested_count:
+        return f" with {attached_count} attachment(s)"
+    return f" with {attached_count}/{requested_count} attachment(s) attached"
+
+
 def _extract_attachments(payload: dict) -> List[Dict[str, Any]]:
     """
     Extract attachment metadata from a Gmail message payload.
@@ -241,7 +310,7 @@ def _prepare_gmail_message(
     from_email: Optional[str] = None,
     from_name: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, Optional[str], int]:
     """
     Prepare a Gmail message with threading and attachment support.
 
@@ -260,7 +329,7 @@ def _prepare_gmail_message(
         attachments: Optional list of attachments. Each can have 'path' (file path) OR 'content' (base64) + 'filename'
 
     Returns:
-        Tuple of (raw_message, thread_id) where raw_message is base64 encoded
+        Tuple of (raw_message, thread_id, attached_count) where raw_message is base64 encoded
     """
     # Handle reply subject formatting
     reply_subject = subject
@@ -273,6 +342,7 @@ def _prepare_gmail_message(
         raise ValueError("body_format must be either 'plain' or 'html'.")
 
     # Use multipart if attachments are provided
+    attached_count = 0
     if attachments:
         message = MIMEMultipart()
         message.attach(MIMEText(body, normalized_format))
@@ -327,20 +397,24 @@ def _prepare_gmail_message(
                 part.set_payload(file_data)
                 encoders.encode_base64(part)
 
-                # Sanitize filename to prevent header injection and ensure valid quoting
+                # Use add_header with keyword argument so Python's email
+                # library applies RFC 2231 encoding for non-ASCII filenames
+                # (e.g. filename*=utf-8''Pr%C3%BCfbericht.pdf).  Manual
+                # string formatting would drop non-ASCII characters and cause
+                # Gmail to display "noname".
                 safe_filename = (
-                    (filename or "")
+                    (filename or "attachment")
                     .replace("\r", "")
                     .replace("\n", "")
-                    .replace("\\", "\\\\")
-                    .replace('"', r"\"")
-                )
+                    .replace("\x00", "")
+                ) or "attachment"
 
                 part.add_header(
-                    "Content-Disposition", f'attachment; filename="{safe_filename}"'
+                    "Content-Disposition", "attachment", filename=safe_filename
                 )
 
                 message.attach(part)
+                attached_count += 1
                 logger.info(f"Attached file: {filename} ({len(file_data)} bytes)")
             except Exception as e:
                 logger.error(f"Failed to attach {filename or file_path}: {e}")
@@ -379,7 +453,7 @@ def _prepare_gmail_message(
     # Encode message
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
-    return raw_message, thread_id
+    return raw_message, thread_id, attached_count
 
 
 def _generate_gmail_web_url(item_id: str, account_index: int = 0) -> str:
@@ -846,7 +920,11 @@ async def get_gmail_attachment_content(
     user_google_email: str,
 ) -> str:
     """
-    Downloads the content of a specific email attachment.
+    Downloads an email attachment and saves it to local disk.
+
+    In stdio mode, returns the local file path for direct access.
+    In HTTP mode, returns a temporary download URL (valid for 1 hour).
+    May re-fetch message metadata to resolve filename and MIME type.
 
     Args:
         message_id (str): The ID of the Gmail message containing the attachment.
@@ -854,19 +932,14 @@ async def get_gmail_attachment_content(
         user_google_email (str): The user's Google email address. Required.
 
     Returns:
-        str: Attachment metadata and base64-encoded content that can be decoded and saved.
+        str: Attachment metadata with either a local file path or download URL.
     """
     logger.info(
         f"[get_gmail_attachment_content] Invoked. Message ID: '{message_id}', Email: '{user_google_email}'"
     )
 
-    # Download attachment directly without refetching message metadata.
-    #
-    # Important: Gmail attachment IDs are ephemeral and change between API calls for the
-    # same message. If we refetch the message here to get metadata, the new attachment IDs
-    # won't match the attachment_id parameter provided by the caller, causing the function
-    # to fail. The attachment download endpoint returns size information, and filename/mime
-    # type should be obtained from the original message content call that provided this ID.
+    # Download attachment content first, then optionally re-fetch message metadata
+    # to resolve filename and MIME type for the saved file.
     try:
         attachment = await asyncio.to_thread(
             service.users()
@@ -908,57 +981,90 @@ async def get_gmail_attachment_content(
         )
         return "\n".join(result_lines)
 
-    # Save attachment and generate URL
+    # Save attachment to local disk and return file path
     try:
         from core.attachment_storage import get_attachment_storage, get_attachment_url
+        from core.config import get_transport_mode
 
         storage = get_attachment_storage()
 
-        # Try to get filename and mime type from message (optional - attachment IDs are ephemeral)
+        # Try to get filename and mime type from message
         filename = None
         mime_type = None
         try:
-            # Quick metadata fetch to try to get attachment info
-            # Note: This might fail if attachment IDs changed, but worth trying
-            message_metadata = await asyncio.to_thread(
+            # Use format="full" with fields to limit response to attachment metadata only
+            message_full = await asyncio.to_thread(
                 service.users()
                 .messages()
-                .get(userId="me", id=message_id, format="metadata")
+                .get(
+                    userId="me",
+                    id=message_id,
+                    format="full",
+                    fields="payload(parts(filename,mimeType,body(attachmentId,size)),body(attachmentId,size),filename,mimeType)",
+                )
                 .execute
             )
-            payload = message_metadata.get("payload", {})
+            payload = message_full.get("payload", {})
             attachments = _extract_attachments(payload)
+
+            # First try exact attachmentId match
             for att in attachments:
                 if att.get("attachmentId") == attachment_id:
                     filename = att.get("filename")
                     mime_type = att.get("mimeType")
                     break
+
+            # Fallback: match by size if exactly one attachment matches (IDs are ephemeral)
+            if not filename and attachments:
+                size_matches = [
+                    att
+                    for att in attachments
+                    if att.get("size") and abs(att["size"] - size_bytes) < 100
+                ]
+                if len(size_matches) == 1:
+                    filename = size_matches[0].get("filename")
+                    mime_type = size_matches[0].get("mimeType")
+                    logger.warning(
+                        f"Attachment {attachment_id} matched by size fallback as '{filename}'"
+                    )
+
+            # Last resort: if only one attachment, use its name
+            if not filename and len(attachments) == 1:
+                filename = attachments[0].get("filename")
+                mime_type = attachments[0].get("mimeType")
         except Exception:
-            # If we can't get metadata, use defaults
             logger.debug(
                 f"Could not fetch attachment metadata for {attachment_id}, using defaults"
             )
 
-        # Save attachment
-        file_id = storage.save_attachment(
+        # Save attachment to local disk
+        result = storage.save_attachment(
             base64_data=base64_data, filename=filename, mime_type=mime_type
         )
-
-        # Generate URL
-        attachment_url = get_attachment_url(file_id)
 
         result_lines = [
             "Attachment downloaded successfully!",
             f"Message ID: {message_id}",
+            f"Filename: {filename or 'unknown'}",
             f"Size: {size_kb:.1f} KB ({size_bytes} bytes)",
-            f"\n📎 Download URL: {attachment_url}",
-            "\nThe attachment has been saved and is available at the URL above.",
-            "The file will expire after 1 hour.",
-            "\nNote: Attachment IDs are ephemeral. Always use IDs from the most recent message fetch.",
         ]
 
+        if get_transport_mode() == "stdio":
+            result_lines.append(f"\n📎 Saved to: {result.path}")
+            result_lines.append(
+                "\nThe file has been saved to disk and can be accessed directly via the file path."
+            )
+        else:
+            download_url = get_attachment_url(result.file_id)
+            result_lines.append(f"\n📎 Download URL: {download_url}")
+            result_lines.append("\nThe file will expire after 1 hour.")
+
+        result_lines.append(
+            "\nNote: Attachment IDs are ephemeral. Always use IDs from the most recent message fetch."
+        )
+
         logger.info(
-            f"[get_gmail_attachment_content] Successfully saved {size_kb:.1f} KB attachment as {file_id}"
+            f"[get_gmail_attachment_content] Successfully saved {size_kb:.1f} KB attachment to {result.path}"
         )
         return "\n".join(result_lines)
 
@@ -1142,7 +1248,7 @@ async def send_gmail_message(
     # Prepare the email message
     # Use from_email (Send As alias) if provided, otherwise default to authenticated user
     sender_email = from_email or user_google_email
-    raw_message, thread_id_final = _prepare_gmail_message(
+    raw_message, thread_id_final, attached_count = _prepare_gmail_message(
         subject=subject,
         body=body,
         to=to,
@@ -1157,6 +1263,12 @@ async def send_gmail_message(
         attachments=attachments if attachments else None,
     )
 
+    requested_attachment_count = len(attachments or [])
+    if requested_attachment_count > 0 and attached_count == 0:
+        raise UserInputError(
+            "No valid attachments were added. Verify each attachment path/content and retry."
+        )
+
     send_body = {"raw": raw_message}
 
     # Associate with thread if provided
@@ -1169,8 +1281,11 @@ async def send_gmail_message(
     )
     message_id = sent_message.get("id")
 
-    if attachments:
-        return f"Email sent with {len(attachments)} attachment(s)! Message ID: {message_id}"
+    if requested_attachment_count > 0:
+        attachment_info = _format_attachment_result(
+            attached_count, requested_attachment_count
+        )
+        return f"Email sent{attachment_info}! Message ID: {message_id}"
     return f"Email sent! Message ID: {message_id}"
 
 
@@ -1236,6 +1351,12 @@ async def draft_gmail_message(
             description="Optional list of attachments. Each can have: 'path' (file path, auto-encodes), OR 'content' (standard base64, not urlsafe) + 'filename'. Optional 'mime_type' (auto-detected from path if not provided).",
         ),
     ] = None,
+    include_signature: Annotated[
+        bool,
+        Field(
+            description="Whether to append the Gmail signature from Settings > Signature when available. Defaults to true.",
+        ),
+    ] = True,
 ) -> str:
     """
     Creates a draft email in the user's Gmail account. Supports both new drafts and reply drafts with optional attachments.
@@ -1265,6 +1386,8 @@ async def draft_gmail_message(
               - 'content' (required): Standard base64-encoded file content (not urlsafe)
               - 'filename' (required): Name of the file
               - 'mime_type' (optional): MIME type (defaults to 'application/octet-stream')
+        include_signature (bool): Whether to append Gmail signature HTML from send-as settings.
+            If unavailable (e.g., missing gmail.settings.basic scope), the draft is still created without signature.
 
     Returns:
         str: Confirmation message with the created draft's ID.
@@ -1328,9 +1451,16 @@ async def draft_gmail_message(
     # Prepare the email message
     # Use from_email (Send As alias) if provided, otherwise default to authenticated user
     sender_email = from_email or user_google_email
-    raw_message, thread_id_final = _prepare_gmail_message(
+    draft_body = body
+    if include_signature:
+        signature_html = await _get_send_as_signature_html(
+            service, from_email=sender_email
+        )
+        draft_body = _append_signature_to_body(draft_body, body_format, signature_html)
+
+    raw_message, thread_id_final, attached_count = _prepare_gmail_message(
         subject=subject,
-        body=body,
+        body=draft_body,
         body_format=body_format,
         to=to,
         cc=cc,
@@ -1342,6 +1472,12 @@ async def draft_gmail_message(
         from_name=from_name,
         attachments=attachments,
     )
+
+    requested_attachment_count = len(attachments or [])
+    if requested_attachment_count > 0 and attached_count == 0:
+        raise UserInputError(
+            "No valid attachments were added. Verify each attachment path/content and retry."
+        )
 
     # Create a draft instead of sending
     draft_body = {"message": {"raw": raw_message}}
@@ -1355,7 +1491,9 @@ async def draft_gmail_message(
         service.users().drafts().create(userId="me", body=draft_body).execute
     )
     draft_id = created_draft.get("id")
-    attachment_info = f" with {len(attachments)} attachment(s)" if attachments else ""
+    attachment_info = _format_attachment_result(
+        attached_count, requested_attachment_count
+    )
     return f"Draft created{attachment_info}! Draft ID: {draft_id}"
 
 
@@ -1787,88 +1925,72 @@ async def list_gmail_filters(service, user_google_email: str) -> str:
 
 
 @server.tool()
-@handle_http_errors("create_gmail_filter", service_type="gmail")
+@handle_http_errors("manage_gmail_filter", service_type="gmail")
 @require_google_service("gmail", "gmail_settings_basic")
-async def create_gmail_filter(
+async def manage_gmail_filter(
     service,
     user_google_email: str,
-    criteria: Annotated[
-        Dict[str, Any],
-        Field(
-            description="Filter criteria object as defined in the Gmail API.",
-        ),
-    ],
-    action: Annotated[
-        Dict[str, Any],
-        Field(
-            description="Filter action object as defined in the Gmail API.",
-        ),
-    ],
+    action: str,
+    criteria: Optional[Dict[str, Any]] = None,
+    filter_action: Optional[Dict[str, Any]] = None,
+    filter_id: Optional[str] = None,
 ) -> str:
     """
-    Creates a Gmail filter using the users.settings.filters API.
+    Manages Gmail filters. Supports creating and deleting filters.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
-        criteria (Dict[str, Any]): Criteria for matching messages.
-        action (Dict[str, Any]): Actions to apply to matched messages.
+        action (str): Action to perform - "create" or "delete".
+        criteria (Optional[Dict[str, Any]]): Filter criteria object (required for create).
+        filter_action (Optional[Dict[str, Any]]): Filter action object (required for create). Named 'filter_action' to avoid shadowing the 'action' parameter.
+        filter_id (Optional[str]): ID of the filter to delete (required for delete).
 
     Returns:
-        str: Confirmation message with the created filter ID.
+        str: Confirmation message with filter details.
     """
-    logger.info("[create_gmail_filter] Invoked")
-
-    filter_body = {"criteria": criteria, "action": action}
-
-    created_filter = await asyncio.to_thread(
-        service.users()
-        .settings()
-        .filters()
-        .create(userId="me", body=filter_body)
-        .execute
-    )
-
-    filter_id = created_filter.get("id", "(unknown)")
-    return f"Filter created successfully!\nFilter ID: {filter_id}"
-
-
-@server.tool()
-@handle_http_errors("delete_gmail_filter", service_type="gmail")
-@require_google_service("gmail", "gmail_settings_basic")
-async def delete_gmail_filter(
-    service,
-    user_google_email: str,
-    filter_id: str = Field(..., description="ID of the filter to delete."),
-) -> str:
-    """
-    Deletes a Gmail filter by ID.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        filter_id (str): The ID of the filter to delete.
-
-    Returns:
-        str: Confirmation message for the deletion.
-    """
-    logger.info(f"[delete_gmail_filter] Invoked. Filter ID: '{filter_id}'")
-
-    filter_details = await asyncio.to_thread(
-        service.users().settings().filters().get(userId="me", id=filter_id).execute
-    )
-
-    await asyncio.to_thread(
-        service.users().settings().filters().delete(userId="me", id=filter_id).execute
-    )
-
-    criteria = filter_details.get("criteria", {})
-    action = filter_details.get("action", {})
-
-    return (
-        "Filter deleted successfully!\n"
-        f"Filter ID: {filter_id}\n"
-        f"Criteria: {criteria or '(none)'}\n"
-        f"Action: {action or '(none)'}"
-    )
+    action_lower = action.lower().strip()
+    if action_lower == "create":
+        if not criteria or not filter_action:
+            raise ValueError(
+                "criteria and filter_action are required for create action"
+            )
+        logger.info("[manage_gmail_filter] Creating filter")
+        filter_body = {"criteria": criteria, "action": filter_action}
+        created_filter = await asyncio.to_thread(
+            service.users()
+            .settings()
+            .filters()
+            .create(userId="me", body=filter_body)
+            .execute
+        )
+        fid = created_filter.get("id", "(unknown)")
+        return f"Filter created successfully!\nFilter ID: {fid}"
+    elif action_lower == "delete":
+        if not filter_id:
+            raise ValueError("filter_id is required for delete action")
+        logger.info(f"[manage_gmail_filter] Deleting filter {filter_id}")
+        filter_details = await asyncio.to_thread(
+            service.users().settings().filters().get(userId="me", id=filter_id).execute
+        )
+        await asyncio.to_thread(
+            service.users()
+            .settings()
+            .filters()
+            .delete(userId="me", id=filter_id)
+            .execute
+        )
+        criteria_info = filter_details.get("criteria", {})
+        action_info = filter_details.get("action", {})
+        return (
+            "Filter deleted successfully!\n"
+            f"Filter ID: {filter_id}\n"
+            f"Criteria: {criteria_info or '(none)'}\n"
+            f"Action: {action_info or '(none)'}"
+        )
+    else:
+        raise ValueError(
+            f"Invalid action '{action_lower}'. Must be 'create' or 'delete'."
+        )
 
 
 @server.tool()
