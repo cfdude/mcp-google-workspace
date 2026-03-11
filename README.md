@@ -10,10 +10,9 @@
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/workspace-mcp?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=BLUE&left_text=downloads)](https://pepy.tech/projects/workspace-mcp)
 [![Website](https://img.shields.io/badge/Website-workspacemcp.com-green.svg)](https://workspacemcp.com)
 
-*Full natural language control over Google Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks, Contacts, and Chat through all MCP clients, AI assistants and developer tools. Now includes a full featured CLI for use with tools like Claude Code and Codex!*
+*Full natural language control over Google Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks, Contacts, and Chat through all MCP clients, AI assistants and developer tools. Includes a full featured CLI for use with tools like Claude Code and Codex!*
 
-**The most feature-complete Google Workspace MCP server**, with Remote OAuth2.1 multi-user support and 1-click Claude installation.
-
+**The most feature-complete Google Workspace MCP server**, with Remote OAuth2.1 multi-user support and 1-click Claude installation. With native OAuth 2.1, stateless mode and external auth server support, it's the only Workspace MCP you can host for your whole organization centrally & securely!
 
 ###### Support for all free Google accounts (Gmail, Docs, Drive etc) & Google Workspace plans (Starter, Standard, Plus, Enterprise, Non Profit) with expanded app options like Chat & Spaces. <br/><br /> Interested in a private, managed cloud instance? [That can be arranged.](https://workspacemcp.com/workspace-mcp-cloud)
 
@@ -21,9 +20,6 @@
 </div>
 
 <div align="center">
-<a href="https://glama.ai/mcp/servers/@taylorwilsdon/google_workspace_mcp">
-  <img width="170" src="https://glama.ai/mcp/servers/@taylorwilsdon/google_workspace_mcp/badge" alt="Google Workspace Server MCP server" align="center"/>
-</a>
 <a href="https://www.pulsemcp.com/servers/taylorwilsdon-google-workspace">
 <img width="375" src="https://github.com/user-attachments/assets/0794ef1a-dc1c-447d-9661-9c704d7acc9d" align="center"/>
 </a>
@@ -571,6 +567,7 @@ uv run main.py --permissions gmail:send drive:full --tool-tier core
 Granular permissions mode provides service-by-service scope control:
 - Format: `service:level` (one entry per service)
 - Gmail levels: `readonly`, `organize`, `drafts`, `send`, `full` (cumulative)
+- Tasks levels: `readonly`, `manage`, `full` (cumulative; `manage` allows create/update/move but denies `delete` and `clear_completed`)
 - Other services currently support: `readonly`, `full`
 - `--permissions` and `--read-only` are mutually exclusive
 - `--permissions` cannot be combined with `--tools`; enabled services are determined by the `--permissions` entries (optionally filtered by `--tool-tier`)
@@ -1310,6 +1307,8 @@ export WORKSPACE_MCP_OAUTH_PROXY_VALKEY_HOST=redis.example.com
 export WORKSPACE_MCP_OAUTH_PROXY_VALKEY_PORT=6379
 ```
 
+> Disk support requires `workspace-mcp[disk]` (or `py-key-value-aio[disk]`) when installing from source.
+> The official Docker image includes the `disk` extra by default.
 > Valkey support is optional. Install `workspace-mcp[valkey]` (or `py-key-value-aio[valkey]`) only if you enable the Valkey backend.
 > Windows: building `valkey-glide` from source requires MSVC C++ build tools with C11 support. If you see `aws-lc-sys` C11 errors, set `CFLAGS=/std:c11`.
 
