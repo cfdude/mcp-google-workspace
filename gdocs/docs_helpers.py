@@ -1459,6 +1459,48 @@ def create_create_header_footer_request(
     raise ValueError("section_type must be 'header' or 'footer'")
 
 
+def create_insert_table_row_request(
+    table_start_index: int,
+    row_index: int,
+    insert_below: bool = True,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build an insertTableRow request."""
+    location: Dict[str, Any] = {"index": table_start_index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {
+        "insertTableRow": {
+            "tableCellLocation": {
+                "tableStartLocation": location,
+                "rowIndex": row_index,
+                "columnIndex": 0,
+            },
+            "insertBelow": insert_below,
+        }
+    }
+
+
+def create_delete_table_row_request(
+    table_start_index: int,
+    row_index: int,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a deleteTableRow request."""
+    location: Dict[str, Any] = {"index": table_start_index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {
+        "deleteTableRow": {
+            "tableCellLocation": {
+                "tableStartLocation": location,
+                "rowIndex": row_index,
+                "columnIndex": 0,
+            }
+        }
+    }
+
+
 def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
     """
     Validate a batch operation dictionary.
@@ -1496,6 +1538,8 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
         "insert_doc_tab": ["title", "index"],
         "delete_doc_tab": ["tab_id"],
         "update_doc_tab": ["tab_id", "title"],
+        "insert_table_row": ["table_start_index", "row_index"],
+        "delete_table_row": ["table_start_index", "row_index"],
     }
 
     if op_type not in required_fields:

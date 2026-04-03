@@ -31,6 +31,8 @@ from gdocs.docs_helpers import (
     create_insert_doc_tab_request,
     create_delete_doc_tab_request,
     create_update_doc_tab_request,
+    create_insert_table_row_request,
+    create_delete_table_row_request,
     validate_operation,
 )
 from gdocs.managers.validation_manager import ValidationManager
@@ -709,6 +711,24 @@ class BatchOperationManager:
             request = create_update_doc_tab_request(op["tab_id"], op["title"])
             description = f"rename tab '{op['tab_id']}' to '{op['title']}'"
 
+        elif op_type == "insert_table_row":
+            request = create_insert_table_row_request(
+                table_start_index=op["table_start_index"],
+                row_index=op["row_index"],
+                insert_below=op.get("insert_below", True),
+                tab_id=tab_id,
+            )
+            direction = "below" if op.get("insert_below", True) else "above"
+            description = f"insert row {direction} row {op['row_index']} in table at {op['table_start_index']}"
+
+        elif op_type == "delete_table_row":
+            request = create_delete_table_row_request(
+                table_start_index=op["table_start_index"],
+                row_index=op["row_index"],
+                tab_id=tab_id,
+            )
+            description = f"delete row {op['row_index']} from table at {op['table_start_index']}"
+
         else:
             supported_types = [
                 "insert_text",
@@ -732,6 +752,8 @@ class BatchOperationManager:
                 "insert_doc_tab",
                 "delete_doc_tab",
                 "update_doc_tab",
+                "insert_table_row",
+                "delete_table_row",
             ]
             raise ValueError(
                 f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}"
@@ -1022,6 +1044,16 @@ class BatchOperationManager:
                 "update_doc_tab": {
                     "required": ["tab_id", "title"],
                     "description": "Rename a document tab",
+                },
+                "insert_table_row": {
+                    "required": ["table_start_index", "row_index"],
+                    "optional": ["insert_below", "tab_id"],
+                    "description": "Insert a row above or below a reference row in a table",
+                },
+                "delete_table_row": {
+                    "required": ["table_start_index", "row_index"],
+                    "optional": ["tab_id"],
+                    "description": "Delete a row from a table",
                 },
             },
             "example_operations": [

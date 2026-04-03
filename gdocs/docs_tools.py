@@ -1087,6 +1087,10 @@ async def batch_update_doc(
                          omitted, the style is applied to the entire table.
       insert_table     - required: rows (int), columns (int)
                          optional: index (int), tab_id, segment_id, end_of_segment
+      insert_table_row - required: table_start_index (int), row_index (int)
+                         optional: insert_below (bool, default true), tab_id
+      delete_table_row - required: table_start_index (int), row_index (int)
+                         optional: tab_id
       insert_page_break- optional: index (int), end_of_segment, tab_id
       insert_section_break
                        - optional: index (int), end_of_segment, section_type
