@@ -828,7 +828,10 @@ class ValidationManager:
                         f"{padding_name} must be a number, got {type(padding_value).__name__}",
                     )
                 if padding_value < 0:
-                    return False, f"{padding_name} must be non-negative, got {padding_value}"
+                    return (
+                        False,
+                        f"{padding_name} must be non-negative, got {padding_value}",
+                    )
 
         if content_alignment is not None:
             if not isinstance(content_alignment, str):

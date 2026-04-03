@@ -43,7 +43,9 @@ class TestCreateInsertTableColumnRequest:
             column_index=0,
             tab_id="t.abc123",
         )
-        location = result["insertTableColumn"]["tableCellLocation"]["tableStartLocation"]
+        location = result["insertTableColumn"]["tableCellLocation"][
+            "tableStartLocation"
+        ]
         assert location == {"index": 10, "tabId": "t.abc123"}
 
     def test_default_insert_right(self):
@@ -71,7 +73,9 @@ class TestCreateDeleteTableColumnRequest:
             column_index=2,
             tab_id="t.xyz",
         )
-        location = result["deleteTableColumn"]["tableCellLocation"]["tableStartLocation"]
+        location = result["deleteTableColumn"]["tableCellLocation"][
+            "tableStartLocation"
+        ]
         assert location == {"index": 10, "tabId": "t.xyz"}
 
 

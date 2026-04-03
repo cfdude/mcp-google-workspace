@@ -25,7 +25,10 @@ class TestCreateUpdateTableColumnPropertiesRequest:
         inner = result["updateTableColumnProperties"]
         assert inner["tableStartLocation"] == {"index": 10}
         assert inner["columnIndices"] == [0, 1]
-        assert inner["tableColumnProperties"]["width"] == {"magnitude": 72.0, "unit": "PT"}
+        assert inner["tableColumnProperties"]["width"] == {
+            "magnitude": 72.0,
+            "unit": "PT",
+        }
         assert inner["tableColumnProperties"]["widthType"] == "FIXED_WIDTH"
         assert "width" in inner["fields"]
         assert "widthType" in inner["fields"]
@@ -58,7 +61,10 @@ class TestCreateUpdateTableColumnPropertiesRequest:
             width=50.5,
         )
         inner = result["updateTableColumnProperties"]
-        assert inner["tableColumnProperties"]["width"] == {"magnitude": 50.5, "unit": "PT"}
+        assert inner["tableColumnProperties"]["width"] == {
+            "magnitude": 50.5,
+            "unit": "PT",
+        }
         assert inner["fields"] == "width"
         assert "widthType" not in inner["tableColumnProperties"]
 
@@ -94,26 +100,32 @@ class TestCreateUpdateTableColumnPropertiesRequest:
 
 class TestValidateOperation:
     def test_valid_update_table_column_properties(self):
-        is_valid, msg = validate_operation({
-            "type": "update_table_column_properties",
-            "table_start_index": 10,
-            "column_indices": [0, 1],
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "update_table_column_properties",
+                "table_start_index": 10,
+                "column_indices": [0, 1],
+            }
+        )
         assert is_valid, msg
 
     def test_missing_column_indices(self):
-        is_valid, msg = validate_operation({
-            "type": "update_table_column_properties",
-            "table_start_index": 10,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "update_table_column_properties",
+                "table_start_index": 10,
+            }
+        )
         assert not is_valid
         assert "column_indices" in msg
 
     def test_missing_table_start_index(self):
-        is_valid, msg = validate_operation({
-            "type": "update_table_column_properties",
-            "column_indices": [0],
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "update_table_column_properties",
+                "column_indices": [0],
+            }
+        )
         assert not is_valid
         assert "table_start_index" in msg
 

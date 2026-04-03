@@ -90,9 +90,7 @@ class TestValidateOperation:
         assert "row_index" in msg
 
     def test_insert_table_row_missing_table_start_index(self):
-        is_valid, msg = validate_operation(
-            {"type": "insert_table_row", "row_index": 2}
-        )
+        is_valid, msg = validate_operation({"type": "insert_table_row", "row_index": 2})
         assert not is_valid
         assert "table_start_index" in msg
 
