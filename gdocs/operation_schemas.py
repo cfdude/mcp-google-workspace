@@ -159,6 +159,19 @@ class InsertTableOperation(SegmentTargetDocOperation):
         return self
 
 
+class InsertTableRowOperation(StrictDocOperation):
+    type: Literal["insert_table_row"]
+    table_start_index: int
+    row_index: int
+    insert_below: bool = True
+
+
+class DeleteTableRowOperation(StrictDocOperation):
+    type: Literal["delete_table_row"]
+    table_start_index: int
+    row_index: int
+
+
 class InsertPageBreakOperation(StrictDocOperation):
     type: Literal["insert_page_break"]
     index: Optional[int] = Field(
@@ -355,6 +368,8 @@ BatchDocOperation = Annotated[
         UpdateParagraphStyleOperation,
         UpdateTableCellStyleOperation,
         InsertTableOperation,
+        InsertTableRowOperation,
+        DeleteTableRowOperation,
         InsertPageBreakOperation,
         InsertSectionBreakOperation,
         FindReplaceOperation,
