@@ -1543,6 +1543,59 @@ def create_delete_table_column_request(
     }
 
 
+def _build_table_range(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int,
+    column_span: int,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a tableRange object used by merge/unmerge requests."""
+    location: Dict[str, Any] = {"index": table_start_index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {
+        "tableRange": {
+            "tableCellLocation": {
+                "tableStartLocation": location,
+                "rowIndex": row_index,
+                "columnIndex": column_index,
+            },
+            "rowSpan": row_span,
+            "columnSpan": column_span,
+        }
+    }
+
+
+def create_merge_table_cells_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int,
+    column_span: int,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a mergeTableCells request."""
+    return {"mergeTableCells": _build_table_range(
+        table_start_index, row_index, column_index, row_span, column_span, tab_id
+    )}
+
+
+def create_unmerge_table_cells_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int,
+    column_span: int,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build an unmergeTableCells request."""
+    return {"unmergeTableCells": _build_table_range(
+        table_start_index, row_index, column_index, row_span, column_span, tab_id
+    )}
+
+
 def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
     """
     Validate a batch operation dictionary.
@@ -1584,6 +1637,8 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
         "delete_table_row": ["table_start_index", "row_index"],
         "insert_table_column": ["table_start_index", "column_index"],
         "delete_table_column": ["table_start_index", "column_index"],
+        "merge_table_cells": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+        "unmerge_table_cells": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
     }
 
     if op_type not in required_fields:
