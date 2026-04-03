@@ -172,6 +172,19 @@ class DeleteTableRowOperation(StrictDocOperation):
     row_index: int
 
 
+class InsertTableColumnOperation(StrictDocOperation):
+    type: Literal["insert_table_column"]
+    table_start_index: int
+    column_index: int
+    insert_right: bool = True
+
+
+class DeleteTableColumnOperation(StrictDocOperation):
+    type: Literal["delete_table_column"]
+    table_start_index: int
+    column_index: int
+
+
 class InsertPageBreakOperation(StrictDocOperation):
     type: Literal["insert_page_break"]
     index: Optional[int] = Field(
@@ -370,6 +383,8 @@ BatchDocOperation = Annotated[
         InsertTableOperation,
         InsertTableRowOperation,
         DeleteTableRowOperation,
+        InsertTableColumnOperation,
+        DeleteTableColumnOperation,
         InsertPageBreakOperation,
         InsertSectionBreakOperation,
         FindReplaceOperation,

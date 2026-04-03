@@ -33,6 +33,8 @@ from gdocs.docs_helpers import (
     create_update_doc_tab_request,
     create_insert_table_row_request,
     create_delete_table_row_request,
+    create_insert_table_column_request,
+    create_delete_table_column_request,
     validate_operation,
 )
 from gdocs.managers.validation_manager import ValidationManager
@@ -729,6 +731,24 @@ class BatchOperationManager:
             )
             description = f"delete row {op['row_index']} from table at {op['table_start_index']}"
 
+        elif op_type == "insert_table_column":
+            request = create_insert_table_column_request(
+                table_start_index=op["table_start_index"],
+                column_index=op["column_index"],
+                insert_right=op.get("insert_right", True),
+                tab_id=tab_id,
+            )
+            direction = "right of" if op.get("insert_right", True) else "left of"
+            description = f"insert column {direction} column {op['column_index']} in table at {op['table_start_index']}"
+
+        elif op_type == "delete_table_column":
+            request = create_delete_table_column_request(
+                table_start_index=op["table_start_index"],
+                column_index=op["column_index"],
+                tab_id=tab_id,
+            )
+            description = f"delete column {op['column_index']} from table at {op['table_start_index']}"
+
         else:
             supported_types = [
                 "insert_text",
@@ -754,6 +774,8 @@ class BatchOperationManager:
                 "update_doc_tab",
                 "insert_table_row",
                 "delete_table_row",
+                "insert_table_column",
+                "delete_table_column",
             ]
             raise ValueError(
                 f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}"
@@ -1054,6 +1076,16 @@ class BatchOperationManager:
                     "required": ["table_start_index", "row_index"],
                     "optional": ["tab_id"],
                     "description": "Delete a row from a table",
+                },
+                "insert_table_column": {
+                    "required": ["table_start_index", "column_index"],
+                    "optional": ["insert_right", "tab_id"],
+                    "description": "Insert a column to the left or right of a reference column in a table",
+                },
+                "delete_table_column": {
+                    "required": ["table_start_index", "column_index"],
+                    "optional": ["tab_id"],
+                    "description": "Delete a column from a table",
                 },
             },
             "example_operations": [
