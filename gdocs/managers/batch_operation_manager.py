@@ -35,6 +35,8 @@ from gdocs.docs_helpers import (
     create_delete_table_row_request,
     create_insert_table_column_request,
     create_delete_table_column_request,
+    create_merge_table_cells_request,
+    create_unmerge_table_cells_request,
     validate_operation,
 )
 from gdocs.managers.validation_manager import ValidationManager
@@ -749,6 +751,34 @@ class BatchOperationManager:
             )
             description = f"delete column {op['column_index']} from table at {op['table_start_index']}"
 
+        elif op_type == "merge_table_cells":
+            request = create_merge_table_cells_request(
+                table_start_index=op["table_start_index"],
+                row_index=op["row_index"],
+                column_index=op["column_index"],
+                row_span=op["row_span"],
+                column_span=op["column_span"],
+                tab_id=tab_id,
+            )
+            description = (
+                f"merge cells at ({op['row_index']},{op['column_index']}) "
+                f"span {op['row_span']}x{op['column_span']} in table at {op['table_start_index']}"
+            )
+
+        elif op_type == "unmerge_table_cells":
+            request = create_unmerge_table_cells_request(
+                table_start_index=op["table_start_index"],
+                row_index=op["row_index"],
+                column_index=op["column_index"],
+                row_span=op["row_span"],
+                column_span=op["column_span"],
+                tab_id=tab_id,
+            )
+            description = (
+                f"unmerge cells at ({op['row_index']},{op['column_index']}) "
+                f"span {op['row_span']}x{op['column_span']} in table at {op['table_start_index']}"
+            )
+
         else:
             supported_types = [
                 "insert_text",
@@ -776,6 +806,8 @@ class BatchOperationManager:
                 "delete_table_row",
                 "insert_table_column",
                 "delete_table_column",
+                "merge_table_cells",
+                "unmerge_table_cells",
             ]
             raise ValueError(
                 f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}"
@@ -1086,6 +1118,16 @@ class BatchOperationManager:
                     "required": ["table_start_index", "column_index"],
                     "optional": ["tab_id"],
                     "description": "Delete a column from a table",
+                },
+                "merge_table_cells": {
+                    "required": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+                    "optional": ["tab_id"],
+                    "description": "Merge a rectangular range of cells in a table",
+                },
+                "unmerge_table_cells": {
+                    "required": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+                    "optional": ["tab_id"],
+                    "description": "Unmerge cells in a table that were previously merged",
                 },
             },
             "example_operations": [

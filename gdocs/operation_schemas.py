@@ -185,6 +185,24 @@ class DeleteTableColumnOperation(StrictDocOperation):
     column_index: int
 
 
+class MergeTableCellsOperation(StrictDocOperation):
+    type: Literal["merge_table_cells"]
+    table_start_index: int
+    row_index: int
+    column_index: int
+    row_span: int
+    column_span: int
+
+
+class UnmergeTableCellsOperation(StrictDocOperation):
+    type: Literal["unmerge_table_cells"]
+    table_start_index: int
+    row_index: int
+    column_index: int
+    row_span: int
+    column_span: int
+
+
 class InsertPageBreakOperation(StrictDocOperation):
     type: Literal["insert_page_break"]
     index: Optional[int] = Field(
@@ -385,6 +403,8 @@ BatchDocOperation = Annotated[
         DeleteTableRowOperation,
         InsertTableColumnOperation,
         DeleteTableColumnOperation,
+        MergeTableCellsOperation,
+        UnmergeTableCellsOperation,
         InsertPageBreakOperation,
         InsertSectionBreakOperation,
         FindReplaceOperation,

@@ -1097,6 +1097,14 @@ async def batch_update_doc(
       delete_table_column
                        - required: table_start_index (int), column_index (int)
                          optional: tab_id
+      merge_table_cells
+                       - required: table_start_index (int), row_index (int),
+                                   column_index (int), row_span (int), column_span (int)
+                         optional: tab_id
+      unmerge_table_cells
+                       - required: table_start_index (int), row_index (int),
+                                   column_index (int), row_span (int), column_span (int)
+                         optional: tab_id
       insert_page_break- optional: index (int), end_of_segment, tab_id
       insert_section_break
                        - optional: index (int), end_of_segment, section_type
