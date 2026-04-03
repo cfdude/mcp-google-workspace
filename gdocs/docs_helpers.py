@@ -1577,9 +1577,11 @@ def create_merge_table_cells_request(
     tab_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a mergeTableCells request."""
-    return {"mergeTableCells": _build_table_range(
-        table_start_index, row_index, column_index, row_span, column_span, tab_id
-    )}
+    return {
+        "mergeTableCells": _build_table_range(
+            table_start_index, row_index, column_index, row_span, column_span, tab_id
+        )
+    }
 
 
 def create_unmerge_table_cells_request(
@@ -1591,9 +1593,11 @@ def create_unmerge_table_cells_request(
     tab_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an unmergeTableCells request."""
-    return {"unmergeTableCells": _build_table_range(
-        table_start_index, row_index, column_index, row_span, column_span, tab_id
-    )}
+    return {
+        "unmergeTableCells": _build_table_range(
+            table_start_index, row_index, column_index, row_span, column_span, tab_id
+        )
+    }
 
 
 def create_update_table_column_properties_request(
@@ -1670,8 +1674,20 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
         "delete_table_row": ["table_start_index", "row_index"],
         "insert_table_column": ["table_start_index", "column_index"],
         "delete_table_column": ["table_start_index", "column_index"],
-        "merge_table_cells": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
-        "unmerge_table_cells": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+        "merge_table_cells": [
+            "table_start_index",
+            "row_index",
+            "column_index",
+            "row_span",
+            "column_span",
+        ],
+        "unmerge_table_cells": [
+            "table_start_index",
+            "row_index",
+            "column_index",
+            "row_span",
+            "column_span",
+        ],
         "update_table_column_properties": ["table_start_index", "column_indices"],
     }
 

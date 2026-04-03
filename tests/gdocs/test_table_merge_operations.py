@@ -40,7 +40,9 @@ class TestCreateMergeTableCellsRequest:
             column_span=2,
             tab_id="t.abc123",
         )
-        location = result["mergeTableCells"]["tableRange"]["tableCellLocation"]["tableStartLocation"]
+        location = result["mergeTableCells"]["tableRange"]["tableCellLocation"][
+            "tableStartLocation"
+        ]
         assert location == {"index": 5, "tabId": "t.abc123"}
 
     def test_no_tab_id_excluded(self):
@@ -51,7 +53,9 @@ class TestCreateMergeTableCellsRequest:
             row_span=2,
             column_span=2,
         )
-        location = result["mergeTableCells"]["tableRange"]["tableCellLocation"]["tableStartLocation"]
+        location = result["mergeTableCells"]["tableRange"]["tableCellLocation"][
+            "tableStartLocation"
+        ]
         assert "tabId" not in location
 
     def test_structure_keys(self):
@@ -91,7 +95,9 @@ class TestCreateUnmergeTableCellsRequest:
             column_span=2,
             tab_id="t.xyz",
         )
-        location = result["unmergeTableCells"]["tableRange"]["tableCellLocation"]["tableStartLocation"]
+        location = result["unmergeTableCells"]["tableRange"]["tableCellLocation"][
+            "tableStartLocation"
+        ]
         assert location == {"index": 15, "tabId": "t.xyz"}
 
     def test_structure_keys(self):
@@ -108,68 +114,80 @@ class TestCreateUnmergeTableCellsRequest:
 
 class TestValidateOperation:
     def test_valid_merge_table_cells(self):
-        is_valid, msg = validate_operation({
-            "type": "merge_table_cells",
-            "table_start_index": 10,
-            "row_index": 0,
-            "column_index": 1,
-            "row_span": 2,
-            "column_span": 3,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "merge_table_cells",
+                "table_start_index": 10,
+                "row_index": 0,
+                "column_index": 1,
+                "row_span": 2,
+                "column_span": 3,
+            }
+        )
         assert is_valid, msg
 
     def test_merge_missing_row_span(self):
-        is_valid, msg = validate_operation({
-            "type": "merge_table_cells",
-            "table_start_index": 10,
-            "row_index": 0,
-            "column_index": 1,
-            "column_span": 3,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "merge_table_cells",
+                "table_start_index": 10,
+                "row_index": 0,
+                "column_index": 1,
+                "column_span": 3,
+            }
+        )
         assert not is_valid
         assert "row_span" in msg
 
     def test_merge_missing_column_index(self):
-        is_valid, msg = validate_operation({
-            "type": "merge_table_cells",
-            "table_start_index": 10,
-            "row_index": 0,
-            "row_span": 2,
-            "column_span": 3,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "merge_table_cells",
+                "table_start_index": 10,
+                "row_index": 0,
+                "row_span": 2,
+                "column_span": 3,
+            }
+        )
         assert not is_valid
         assert "column_index" in msg
 
     def test_valid_unmerge_table_cells(self):
-        is_valid, msg = validate_operation({
-            "type": "unmerge_table_cells",
-            "table_start_index": 10,
-            "row_index": 0,
-            "column_index": 1,
-            "row_span": 2,
-            "column_span": 3,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "unmerge_table_cells",
+                "table_start_index": 10,
+                "row_index": 0,
+                "column_index": 1,
+                "row_span": 2,
+                "column_span": 3,
+            }
+        )
         assert is_valid, msg
 
     def test_unmerge_missing_table_start_index(self):
-        is_valid, msg = validate_operation({
-            "type": "unmerge_table_cells",
-            "row_index": 0,
-            "column_index": 1,
-            "row_span": 2,
-            "column_span": 3,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "unmerge_table_cells",
+                "row_index": 0,
+                "column_index": 1,
+                "row_span": 2,
+                "column_span": 3,
+            }
+        )
         assert not is_valid
         assert "table_start_index" in msg
 
     def test_unmerge_missing_column_span(self):
-        is_valid, msg = validate_operation({
-            "type": "unmerge_table_cells",
-            "table_start_index": 10,
-            "row_index": 0,
-            "column_index": 1,
-            "row_span": 2,
-        })
+        is_valid, msg = validate_operation(
+            {
+                "type": "unmerge_table_cells",
+                "table_start_index": 10,
+                "row_index": 0,
+                "column_index": 1,
+                "row_span": 2,
+            }
+        )
         assert not is_valid
         assert "column_span" in msg
 

@@ -503,7 +503,18 @@ class BatchOperationManager:
                 ("content_alignment", "content alignment"),
             ]:
                 if op.get(param) is not None:
-                    value = f"{op[param]}pt" if param in ("border_width", "padding_top", "padding_bottom", "padding_left", "padding_right") else op[param]
+                    value = (
+                        f"{op[param]}pt"
+                        if param
+                        in (
+                            "border_width",
+                            "padding_top",
+                            "padding_bottom",
+                            "padding_left",
+                            "padding_right",
+                        )
+                        else op[param]
+                    )
                     style_changes.append(f"{name}: {value}")
 
             if op.get("row_index") is not None:
@@ -732,7 +743,9 @@ class BatchOperationManager:
                 row_index=op["row_index"],
                 tab_id=tab_id,
             )
-            description = f"delete row {op['row_index']} from table at {op['table_start_index']}"
+            description = (
+                f"delete row {op['row_index']} from table at {op['table_start_index']}"
+            )
 
         elif op_type == "insert_table_column":
             request = create_insert_table_column_request(
@@ -1135,12 +1148,24 @@ class BatchOperationManager:
                     "description": "Delete a column from a table",
                 },
                 "merge_table_cells": {
-                    "required": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+                    "required": [
+                        "table_start_index",
+                        "row_index",
+                        "column_index",
+                        "row_span",
+                        "column_span",
+                    ],
                     "optional": ["tab_id"],
                     "description": "Merge a rectangular range of cells in a table",
                 },
                 "unmerge_table_cells": {
-                    "required": ["table_start_index", "row_index", "column_index", "row_span", "column_span"],
+                    "required": [
+                        "table_start_index",
+                        "row_index",
+                        "column_index",
+                        "row_span",
+                        "column_span",
+                    ],
                     "optional": ["tab_id"],
                     "description": "Unmerge cells in a table that were previously merged",
                 },
