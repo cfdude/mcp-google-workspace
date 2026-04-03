@@ -1501,6 +1501,48 @@ def create_delete_table_row_request(
     }
 
 
+def create_insert_table_column_request(
+    table_start_index: int,
+    column_index: int,
+    insert_right: bool = True,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build an insertTableColumn request."""
+    location: Dict[str, Any] = {"index": table_start_index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {
+        "insertTableColumn": {
+            "tableCellLocation": {
+                "tableStartLocation": location,
+                "rowIndex": 0,
+                "columnIndex": column_index,
+            },
+            "insertRight": insert_right,
+        }
+    }
+
+
+def create_delete_table_column_request(
+    table_start_index: int,
+    column_index: int,
+    tab_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a deleteTableColumn request."""
+    location: Dict[str, Any] = {"index": table_start_index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {
+        "deleteTableColumn": {
+            "tableCellLocation": {
+                "tableStartLocation": location,
+                "rowIndex": 0,
+                "columnIndex": column_index,
+            }
+        }
+    }
+
+
 def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
     """
     Validate a batch operation dictionary.
@@ -1540,6 +1582,8 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
         "update_doc_tab": ["tab_id", "title"],
         "insert_table_row": ["table_start_index", "row_index"],
         "delete_table_row": ["table_start_index", "row_index"],
+        "insert_table_column": ["table_start_index", "column_index"],
+        "delete_table_column": ["table_start_index", "column_index"],
     }
 
     if op_type not in required_fields:
