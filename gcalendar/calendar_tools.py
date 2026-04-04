@@ -692,9 +692,13 @@ async def _create_event_impl(
     event_body: Dict[str, Any] = {
         "summary": summary,
         "start": (
-            {"date": start_time} if "T" not in start_time else {"dateTime": effective_start}
+            {"date": start_time}
+            if "T" not in start_time
+            else {"dateTime": effective_start}
         ),
-        "end": ({"date": end_time} if "T" not in end_time else {"dateTime": effective_end}),
+        "end": (
+            {"date": end_time} if "T" not in end_time else {"dateTime": effective_end}
+        ),
     }
     if recurrence:
         event_body["recurrence"] = recurrence
@@ -943,7 +947,9 @@ async def _modify_event_impl(
         if timezone is not None and "T" in start_time:
             effective_start = _strip_utc_offset(start_time)
         event_body["start"] = (
-            {"date": start_time} if "T" not in start_time else {"dateTime": effective_start}
+            {"date": start_time}
+            if "T" not in start_time
+            else {"dateTime": effective_start}
         )
         if timezone is not None and "dateTime" in event_body["start"]:
             event_body["start"]["timeZone"] = timezone
@@ -1238,7 +1244,9 @@ async def _rsvp_event_impl(
 
     user_index = next((i for i, a in enumerate(attendees) if a.get("self")), None)
     if user_index is None:
-        raise Exception(f"{user_google_email} was not found in the event's attendee list.")
+        raise Exception(
+            f"{user_google_email} was not found in the event's attendee list."
+        )
 
     updated_attendees = [dict(a) for a in attendees]
     updated_attendees[user_index]["responseStatus"] = response
@@ -1246,12 +1254,16 @@ async def _rsvp_event_impl(
         updated_attendees[user_index]["comment"] = comment
 
     updated_event = await asyncio.to_thread(
-        lambda: service.events().patch(
-            calendarId=calendar_id,
-            eventId=event_id,
-            body={"attendees": updated_attendees},
-            sendUpdates=send_updates,
-        ).execute()
+        lambda: (
+            service.events()
+            .patch(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body={"attendees": updated_attendees},
+                sendUpdates=send_updates,
+            )
+            .execute()
+        )
     )
 
     summary = updated_event.get("summary", "Unknown event")

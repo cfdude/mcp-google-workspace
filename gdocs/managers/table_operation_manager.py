@@ -112,7 +112,12 @@ class TableOperationManager:
             return False, f"Table creation failed: {str(e)}", {}
 
     async def _create_empty_table(
-        self, document_id: str, index: int, rows: int, cols: int, tab_id: Optional[str] = None
+        self,
+        document_id: str,
+        index: int,
+        rows: int,
+        cols: int,
+        tab_id: Optional[str] = None,
     ) -> None:
         """Create an empty table at the specified index."""
         logger.debug(f"Creating {rows}x{cols} table at index {index}")
@@ -254,7 +259,13 @@ class TableOperationManager:
         # so that earlier insertions don't shift the indices of later ones
         cell_operations.sort(key=lambda x: x[0], reverse=True)
 
-        for insertion_index, row_idx, col_idx, cell_text, should_bold in cell_operations:
+        for (
+            insertion_index,
+            row_idx,
+            col_idx,
+            cell_text,
+            should_bold,
+        ) in cell_operations:
             # Insert text using the helper that properly handles tab_id
             requests.append(
                 create_insert_text_request(
