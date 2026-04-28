@@ -31,13 +31,8 @@
         "USER_GOOGLE_EMAIL": "${user_config.USER_GOOGLE_EMAIL}",
         "GOOGLE_OAUTH_REDIRECT_URI": "${user_config.GOOGLE_OAUTH_REDIRECT_URI}",
         "GOOGLE_CLIENT_SECRET_PATH": "${user_config.GOOGLE_CLIENT_SECRET_PATH}",
-        "GOOGLE_CLIENT_SECRETS": "${user_config.GOOGLE_CLIENT_SECRETS}",
         "WORKSPACE_MCP_BASE_URI": "${user_config.WORKSPACE_MCP_BASE_URI}",
-        "WORKSPACE_MCP_PORT": "${user_config.WORKSPACE_MCP_PORT}",
-        "WORKSPACE_EXTERNAL_URL": "${user_config.WORKSPACE_EXTERNAL_URL}",
-        "OAUTHLIB_INSECURE_TRANSPORT": "${user_config.OAUTHLIB_INSECURE_TRANSPORT}",
-        "GOOGLE_PSE_API_KEY": "${user_config.GOOGLE_PSE_API_KEY}",
-        "GOOGLE_PSE_ENGINE_ID": "${user_config.GOOGLE_PSE_ENGINE_ID}"
+        "WORKSPACE_MCP_PORT": "${user_config.WORKSPACE_MCP_PORT}"
       }
     }
   },
@@ -95,7 +90,8 @@
       "type": "string",
       "title": "Google OAuth Client Secret",
       "description": "OAuth 2.0 client secret from Google Cloud Console",
-      "required": false
+      "required": false,
+      "sensitive": true
     },
     "USER_GOOGLE_EMAIL": {
       "type": "string",
@@ -116,12 +112,6 @@
       "description": "Path to the client_secret.json file containing OAuth credentials",
       "required": false
     },
-    "GOOGLE_CLIENT_SECRETS": {
-      "type": "string",
-      "title": "Google Client Secrets (Legacy)",
-      "description": "Legacy environment variable for client secret file path (use GOOGLE_CLIENT_SECRET_PATH instead)",
-      "required": false
-    },
     "WORKSPACE_MCP_BASE_URI": {
       "type": "string",
       "title": "Workspace MCP Base URI",
@@ -135,31 +125,6 @@
       "description": "Port number for the MCP server to listen on",
       "required": false,
       "default": 8000
-    },
-    "WORKSPACE_EXTERNAL_URL": {
-      "type": "string",
-      "title": "External URL",
-      "description": "External URL for reverse proxy setups (e.g., https://your-domain.com). Overrides base_uri:port for OAuth endpoints",
-      "required": false
-    },
-    "OAUTHLIB_INSECURE_TRANSPORT": {
-      "type": "boolean",
-      "title": "OAuth Insecure Transport",
-      "description": "Allow OAuth over HTTP for development (enable for development only)",
-      "required": false,
-      "default": true
-    },
-    "GOOGLE_PSE_API_KEY": {
-      "type": "string",
-      "title": "Google Custom Search API Key",
-      "description": "API key for Google Programmable Search Engine (Custom Search JSON API)",
-      "required": false
-    },
-    "GOOGLE_PSE_ENGINE_ID": {
-      "type": "string",
-      "title": "Google Custom Search Engine ID",
-      "description": "Programmable Search Engine ID (cx parameter) from Google Custom Search Engine Control Panel",
-      "required": false
     }
   },
   "keywords": [
