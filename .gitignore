@@ -3,6 +3,9 @@ certs/
 ecosystem.config.cjs
 Caddyfile
 logs/
+manifest.highway.json
+build-highway-dxt.sh
+*.dxt
 
 # ---- Python artefacts --------------------------------------------------
 __pycache__/

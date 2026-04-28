@@ -84,6 +84,7 @@ def test_is_actually_running_returns_false_when_server_thread_is_dead(monkeypatc
 
 def test_is_actually_running_treats_eaddrinuse_as_callback_port_in_use(monkeypatch):
     server = oauth_callback_server.MinimalOAuthServer(8000, "http://localhost")
+    server.is_running = True  # bypass the "never started" early return guard
 
     class _FakeSocket:
         def __init__(self, *args, **kwargs):  # noqa: ARG002
