@@ -16,10 +16,20 @@ from auth.oauth_config import (
     is_oauth21_enabled,
 )
 
-# Server configuration
-WORKSPACE_MCP_PORT = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", 8000)))
+# Server configuration. WORKSPACE_MCP_PORT is resolved lazily via PEP 562
+# __getattr__ so that the value reflects the current env at access time.
+# main.py mutates WORKSPACE_MCP_PORT in os.environ at startup via the port
+# resolver (auth.port_resolver.resolve_port); consumers that do
+# `from core.config import WORKSPACE_MCP_PORT` inside a function will see the
+# late-bound port instead of a frozen-at-module-import 8000.
 WORKSPACE_MCP_BASE_URI = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
 WORKSPACE_EXTERNAL_URL = os.getenv("WORKSPACE_EXTERNAL_URL")
+
+
+def __getattr__(name: str):
+    if name == "WORKSPACE_MCP_PORT":
+        return int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Disable USER_GOOGLE_EMAIL in OAuth 2.1 multi-user mode
 USER_GOOGLE_EMAIL = (

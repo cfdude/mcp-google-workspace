@@ -375,6 +375,18 @@ def main():
         )
         sys.exit(1)
 
+    # Late-bind the OAuth callback port: probe preferred + fallback range and
+    # mutate WORKSPACE_MCP_PORT in os.environ to the first-available value.
+    # Then refresh the OAuthConfig singleton so its redirect_uri reflects the
+    # bound port. See auth/port_resolver.py for the architectural rationale.
+    from auth.port_resolver import resolve_port, NoAvailablePortError
+    try:
+        resolve_port()
+    except NoAvailablePortError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    reload_oauth_config()
+
     # Set port and base URI once for reuse throughout the function
     port = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", 8000)))
     base_uri = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
