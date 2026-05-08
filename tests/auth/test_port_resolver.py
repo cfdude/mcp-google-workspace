@@ -12,8 +12,6 @@ from contextlib import contextmanager
 
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch):
@@ -94,6 +92,23 @@ def test_oauthconfig_reload_picks_up_resolved_port():
     assert str(bound) in config.redirect_uri, (
         f"redirect_uri {config.redirect_uri!r} must reflect bound port {bound}"
     )
+
+
+def test_raises_on_malformed_port_env(monkeypatch):
+    """Non-numeric WORKSPACE_MCP_PORT raises PortConfigError with actionable message."""
+    pr = _import_fresh("auth.port_resolver")
+    monkeypatch.setenv("WORKSPACE_MCP_PORT", "not_a_number")
+    with pytest.raises(pr.PortConfigError, match="WORKSPACE_MCP_PORT.*not_a_number"):
+        pr.resolve_port()
+
+
+def test_raises_on_malformed_fallback_count_env(monkeypatch):
+    """Non-numeric WORKSPACE_MCP_PORT_FALLBACK_COUNT raises PortConfigError."""
+    pr = _import_fresh("auth.port_resolver")
+    monkeypatch.setenv("WORKSPACE_MCP_PORT", "8000")
+    monkeypatch.setenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", "abc")
+    with pytest.raises(pr.PortConfigError, match="WORKSPACE_MCP_PORT_FALLBACK_COUNT.*abc"):
+        pr.resolve_port()
 
 
 def test_lazy_workspace_mcp_port_via_pep562(monkeypatch):

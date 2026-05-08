@@ -1,20 +1,9 @@
 """
 Port resolver for late-binding the workspace-mcp OAuth callback server.
 
-Architectural principle: MCP server specs must NOT hardcode port numbers.
-Ports are subject to external factors -- other MCPs installed during disconnect
-windows, multiple stdio process spawns by the same client (Claude Desktop /
-Claude Code) -- and must be late-bound at process-start. Specs declare a
-preferred port plus a fallback range; the actual bound port is surfaced
-through startup logs so clients can compose redirect URIs accordingly.
-
-This module is part of a Workspaces-local fork. Tracking issues upstream:
-  - https://github.com/taylorwilsdon/google_workspace_mcp/issues/546
-  - https://github.com/taylorwilsdon/google_workspace_mcp/issues/667
-  - https://github.com/taylorwilsdon/google_workspace_mcp/issues/754
-
-PR-ready upstream patches live under:
-  Core/reference/connectors/workspace-mcp/patches/
+Probes a preferred port plus a small fallback range at process start;
+the first available port is bound and surfaced through startup logs so
+redirect URIs are composed from the actual bound port.
 """
 
 from __future__ import annotations
@@ -32,6 +21,10 @@ DEFAULT_FALLBACK_COUNT = 4
 
 class NoAvailablePortError(RuntimeError):
     """Raised when no port in the preferred + fallback range is free."""
+
+
+class PortConfigError(RuntimeError):
+    """Raised when a port-related env var contains a non-integer value."""
 
 
 def _candidate_ports(preferred: int, fallback_count: int) -> List[int]:
@@ -90,13 +83,22 @@ def resolve_port(
     candidate is in use.
     """
     if preferred is None:
-        preferred = int(
-            os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", str(DEFAULT_PREFERRED_PORT)))
-        )
+        raw = os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", str(DEFAULT_PREFERRED_PORT)))
+        try:
+            preferred = int(raw)
+        except ValueError:
+            env_name = "PORT" if os.getenv("PORT") else "WORKSPACE_MCP_PORT"
+            raise PortConfigError(
+                f"{env_name} must be an integer, got {raw!r}"
+            )
     if fallback_count is None:
-        fallback_count = int(
-            os.getenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", str(DEFAULT_FALLBACK_COUNT))
-        )
+        raw = os.getenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", str(DEFAULT_FALLBACK_COUNT))
+        try:
+            fallback_count = int(raw)
+        except ValueError:
+            raise PortConfigError(
+                f"WORKSPACE_MCP_PORT_FALLBACK_COUNT must be an integer, got {raw!r}"
+            )
     if host is None:
         host = os.getenv("WORKSPACE_MCP_HOST", "0.0.0.0")
 

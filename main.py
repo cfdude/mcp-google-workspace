@@ -379,10 +379,10 @@ def main():
     # mutate WORKSPACE_MCP_PORT in os.environ to the first-available value.
     # Then refresh the OAuthConfig singleton so its redirect_uri reflects the
     # bound port. See auth/port_resolver.py for the architectural rationale.
-    from auth.port_resolver import resolve_port, NoAvailablePortError
+    from auth.port_resolver import resolve_port, NoAvailablePortError, PortConfigError
     try:
         resolve_port()
-    except NoAvailablePortError as exc:
+    except (NoAvailablePortError, PortConfigError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     reload_oauth_config()
