@@ -80,25 +80,25 @@ def resolve_port(
     function to pick up the new value in the OAuthConfig singleton.
 
     Returns the first-available port. Raises NoAvailablePortError if every
-    candidate is in use.
+    candidate is in use, or PortConfigError if a port env var is invalid.
     """
     if preferred is None:
         raw = os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", str(DEFAULT_PREFERRED_PORT)))
         try:
             preferred = int(raw)
-        except ValueError:
+        except ValueError as exc:
             env_name = "PORT" if os.getenv("PORT") else "WORKSPACE_MCP_PORT"
             raise PortConfigError(
                 f"{env_name} must be an integer, got {raw!r}"
-            )
+            ) from exc
     if fallback_count is None:
         raw = os.getenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", str(DEFAULT_FALLBACK_COUNT))
         try:
             fallback_count = int(raw)
-        except ValueError:
+        except ValueError as exc:
             raise PortConfigError(
                 f"WORKSPACE_MCP_PORT_FALLBACK_COUNT must be an integer, got {raw!r}"
-            )
+            ) from exc
     if host is None:
         host = os.getenv("WORKSPACE_MCP_HOST", "0.0.0.0")
 
