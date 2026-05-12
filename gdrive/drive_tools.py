@@ -1423,14 +1423,15 @@ async def get_drive_file_permissions(
     file_id: str,
 ) -> str:
     """
-    Gets detailed metadata about a Google Drive file including sharing permissions.
+    Gets detailed metadata about a Google Drive file including sharing permissions,
+    parent folder IDs, ownership, and lifecycle timestamps.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         file_id (str): The ID of the file to check permissions for.
 
     Returns:
-        str: Detailed file metadata including sharing status and URLs.
+        str: Detailed file metadata including parents, owners, timestamps, sharing status, and URLs.
     """
     logger.info(
         f"[get_drive_file_permissions] Checking file {file_id} for {user_google_email}"
@@ -1445,7 +1446,8 @@ async def get_drive_file_permissions(
             service.files()
             .get(
                 fileId=file_id,
-                fields="id, name, mimeType, size, modifiedTime, owners, "
+                fields="id, name, mimeType, size, parents, createdTime, modifiedTime, "
+                "trashed, driveId, owners, "
                 "permissions(id, type, role, emailAddress, domain, expirationTime, permissionDetails), "
                 "webViewLink, webContentLink, shared, sharingUser, viewersCanCopyContent",
                 supportsAllDrives=True,
@@ -1454,16 +1456,30 @@ async def get_drive_file_permissions(
         )
 
         # Format the response
+        parents = file_metadata.get("parents")
+        parent_str = ", ".join(parents) if parents else "None (root or orphaned)"
+
         output_parts = [
             f"File: {file_metadata.get('name', 'Unknown')}",
             f"ID: {file_id}",
             f"Type: {file_metadata.get('mimeType', 'Unknown')}",
+            f"Parents: {parent_str}",
             f"Size: {file_metadata.get('size', 'N/A')} bytes",
+            f"Created: {file_metadata.get('createdTime', 'N/A')}",
             f"Modified: {file_metadata.get('modifiedTime', 'N/A')}",
-            "",
-            "Sharing Status:",
-            f"  Shared: {file_metadata.get('shared', False)}",
+            f"Trashed: {file_metadata.get('trashed', False)}",
         ]
+
+        if file_metadata.get("driveId"):
+            output_parts.append(f"Shared Drive ID: {file_metadata['driveId']}")
+
+        output_parts.extend(
+            [
+                "",
+                "Sharing Status:",
+                f"  Shared: {file_metadata.get('shared', False)}",
+            ]
+        )
 
         # Add sharing user if available
         sharing_user = file_metadata.get("sharingUser")
