@@ -6,7 +6,7 @@ This module provides MCP tools for interacting with Google Slides API.
 
 import logging
 import asyncio
-from typing import List, Dict, Any
+from typing import Any, Dict, Iterator, List, Optional
 
 from mcp.types import ToolAnnotations
 
@@ -22,7 +22,7 @@ from gslides.slides_helpers import (
 logger = logging.getLogger(__name__)
 
 
-def _extract_shape_text(shape: Dict[str, Any]) -> str:
+def _extract_shape_text(shape: Optional[Dict[str, Any]]) -> str:
     """Extract the full text content from a Slides shape, sorted by text-run start index.
 
     Returns an empty string if the shape has no text. The Slides API stores text
@@ -46,7 +46,9 @@ def _extract_shape_text(shape: Dict[str, Any]) -> str:
     return "".join(r[1] for r in runs)
 
 
-def _iter_text_bearing_elements(elements: List[Dict[str, Any]]):
+def _iter_text_bearing_elements(
+    elements: Optional[List[Dict[str, Any]]],
+) -> Iterator[str]:
     """Yield full text strings from any shape with non-empty text, descending
     recursively into elementGroup.children so grouped shapes are not skipped.
     """
