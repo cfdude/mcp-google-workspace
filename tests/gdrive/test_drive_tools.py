@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from gdrive.drive_helpers import build_drive_list_params
 from gdrive.drive_tools import (
+    get_drive_file_permissions,
     import_to_google_doc,
     list_drive_items,
     search_drive_files,
@@ -31,6 +32,71 @@ def _unwrap(tool):
     while hasattr(fn, "__wrapped__"):
         fn = fn.__wrapped__
     return fn
+
+
+# ---------------------------------------------------------------------------
+# get_drive_file_permissions — owners
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_get_drive_file_permissions_includes_owner_details(mock_resolve_item):
+    """Owner metadata requested from Drive is included in the output."""
+    mock_resolve_item.return_value = ("file123", None)
+    mock_service = Mock()
+    mock_service.files().get().execute.return_value = {
+        "id": "file123",
+        "name": "Budget",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": ["folder1"],
+        "owners": [
+            {
+                "displayName": "Ada Lovelace",
+                "emailAddress": "ada@example.com",
+            },
+            {
+                "name": "Legacy Owner",
+                "email": "legacy@example.com",
+            },
+        ],
+        "permissions": [],
+    }
+
+    result = await _unwrap(get_drive_file_permissions)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_id="file123",
+    )
+
+    fields = mock_service.files.return_value.get.call_args.kwargs["fields"]
+    assert "owners" in fields
+    assert (
+        "Owners: Ada Lovelace (ada@example.com), Legacy Owner (legacy@example.com)"
+        in result
+    )
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_get_drive_file_permissions_handles_missing_owners(mock_resolve_item):
+    """Missing owner metadata is represented explicitly."""
+    mock_resolve_item.return_value = ("file123", None)
+    mock_service = Mock()
+    mock_service.files().get().execute.return_value = {
+        "id": "file123",
+        "name": "Budget",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "permissions": [],
+    }
+
+    result = await _unwrap(get_drive_file_permissions)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_id="file123",
+    )
+
+    assert "Owners: None available" in result
 
 
 # ---------------------------------------------------------------------------
