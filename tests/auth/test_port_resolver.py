@@ -107,7 +107,9 @@ def test_raises_on_malformed_fallback_count_env(monkeypatch):
     pr = _import_fresh("auth.port_resolver")
     monkeypatch.setenv("WORKSPACE_MCP_PORT", "8000")
     monkeypatch.setenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", "abc")
-    with pytest.raises(pr.PortConfigError, match="WORKSPACE_MCP_PORT_FALLBACK_COUNT.*abc"):
+    with pytest.raises(
+        pr.PortConfigError, match="WORKSPACE_MCP_PORT_FALLBACK_COUNT.*abc"
+    ):
         pr.resolve_port()
 
 

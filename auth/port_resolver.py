@@ -83,7 +83,9 @@ def resolve_port(
     candidate is in use, or PortConfigError if a port env var is invalid.
     """
     if preferred is None:
-        raw = os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", str(DEFAULT_PREFERRED_PORT)))
+        raw = os.getenv(
+            "PORT", os.getenv("WORKSPACE_MCP_PORT", str(DEFAULT_PREFERRED_PORT))
+        )
         try:
             preferred = int(raw)
         except ValueError as exc:
@@ -92,7 +94,9 @@ def resolve_port(
                 f"{env_name} must be an integer, got {raw!r}"
             ) from exc
     if fallback_count is None:
-        raw = os.getenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", str(DEFAULT_FALLBACK_COUNT))
+        raw = os.getenv(
+            "WORKSPACE_MCP_PORT_FALLBACK_COUNT", str(DEFAULT_FALLBACK_COUNT)
+        )
         try:
             fallback_count = int(raw)
         except ValueError as exc:

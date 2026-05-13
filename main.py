@@ -380,6 +380,7 @@ def main():
     # Then refresh the OAuthConfig singleton so its redirect_uri reflects the
     # bound port. See auth/port_resolver.py for the architectural rationale.
     from auth.port_resolver import resolve_port, NoAvailablePortError, PortConfigError
+
     try:
         resolve_port()
     except (NoAvailablePortError, PortConfigError) as exc:

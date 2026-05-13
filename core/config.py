@@ -36,6 +36,7 @@ def __getattr__(name: str) -> int:
         return int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 # Disable USER_GOOGLE_EMAIL in OAuth 2.1 multi-user mode
 USER_GOOGLE_EMAIL = (
     None if is_oauth21_enabled() else os.getenv("USER_GOOGLE_EMAIL", None)
