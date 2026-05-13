@@ -8,6 +8,8 @@ This module now imports from there for backward compatibility.
 """
 
 import os
+from typing import TYPE_CHECKING
+
 from auth.oauth_config import (
     get_oauth_base_url,
     get_oauth_redirect_uri,
@@ -25,8 +27,11 @@ from auth.oauth_config import (
 WORKSPACE_MCP_BASE_URI = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
 WORKSPACE_EXTERNAL_URL = os.getenv("WORKSPACE_EXTERNAL_URL")
 
+if TYPE_CHECKING:
+    WORKSPACE_MCP_PORT: int
 
-def __getattr__(name: str):
+
+def __getattr__(name: str) -> int:
     if name == "WORKSPACE_MCP_PORT":
         return int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

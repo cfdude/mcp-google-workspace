@@ -388,7 +388,7 @@ def main():
     reload_oauth_config()
 
     # Set port and base URI once for reuse throughout the function
-    port = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", 8000)))
+    port = int(os.getenv("WORKSPACE_MCP_PORT", "8000"))
     base_uri = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
     host = os.getenv("WORKSPACE_MCP_HOST", "0.0.0.0")
     external_url = os.getenv("WORKSPACE_EXTERNAL_URL")
