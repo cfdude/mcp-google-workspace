@@ -430,7 +430,7 @@ def main():
     W = "\033[1;37m"  # White
     C = "\033[0;36m"  # Cyan
     D = "\033[0;90m"  # Dim
-    RST = "\033[0m"   # Reset
+    RST = "\033[0m"  # Reset
 
     info_lines = [f"{C}{args.transport}  ·  {mode}{RST}"]
     if args.transport == "streamable-http":
@@ -603,16 +603,15 @@ def main():
             logger.error("Failed to import tool '%s': %s", tool, exc, exc_info=True)
             failed.append((tool, exc))
 
-    tool_summary = " ".join(
-        f"{tool_icons.get(t, '🔧')} {t.title()}" for t in loaded
-    )
+    tool_summary = " ".join(f"{tool_icons.get(t, '🔧')} {t.title()}" for t in loaded)
     safe_print(f"🛠️  Loaded {len(loaded)} services: {tool_summary}")
     for tool, exc in failed:
         safe_print(f"   ⚠️ Failed: {tool.title()} ({exc})")
 
     if perms:
         perm_summary = " | ".join(
-            f"{tool_icons.get(svc, ' ')}{svc}:{lvl}" for svc, lvl in sorted(perms.items())
+            f"{tool_icons.get(svc, ' ')}{svc}:{lvl}"
+            for svc, lvl in sorted(perms.items())
         )
         safe_print(f"🔒 Permissions: {perm_summary}")
     safe_print("")

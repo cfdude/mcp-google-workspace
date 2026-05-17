@@ -5,31 +5,16 @@ import os
 from typing import List, Optional
 from importlib import metadata
 
-from core.warning_filters import install_startup_warning_filters
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from starlette.applications import Starlette
-from starlette.datastructures import MutableHeaders
-from starlette.types import Scope, Receive, Send
-from starlette.requests import Request
-from starlette.middleware import Middleware
-
-from mcp.types import ToolAnnotations
-
-install_startup_warning_filters()
-
-from fastmcp import FastMCP
-from fastmcp.server.auth.providers.google import GoogleProvider
-
-from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
+from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
-from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 from auth.mcp_session_middleware import MCPSessionMiddleware
+from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
+from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 from auth.oauth_responses import (
     create_error_response,
     create_success_response,
     create_server_error_response,
 )
-from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.scopes import PROTOCOL_AUTH_SCOPES, SCOPES, get_current_scopes  # noqa
 from core.config import (
     USER_GOOGLE_EMAIL,
@@ -37,7 +22,18 @@ from core.config import (
     set_transport_mode as _set_transport_mode,
     get_oauth_redirect_uri as get_oauth_redirect_uri_for_current_mode,
 )
+from core.warning_filters import install_startup_warning_filters
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastmcp import FastMCP
+from fastmcp.server.auth.providers.google import GoogleProvider
+from mcp.types import ToolAnnotations
+from starlette.applications import Starlette
+from starlette.datastructures import MutableHeaders
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.types import Scope, Receive, Send
 
+install_startup_warning_filters()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
