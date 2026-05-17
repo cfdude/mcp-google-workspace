@@ -5,6 +5,10 @@ import os
 from typing import List, Optional
 from importlib import metadata
 
+from core.warning_filters import install_startup_warning_filters
+
+install_startup_warning_filters()
+
 from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
 from auth.mcp_session_middleware import MCPSessionMiddleware
@@ -22,7 +26,6 @@ from core.config import (
     set_transport_mode as _set_transport_mode,
     get_oauth_redirect_uri as get_oauth_redirect_uri_for_current_mode,
 )
-from core.warning_filters import install_startup_warning_filters
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
@@ -33,7 +36,6 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.types import Scope, Receive, Send
 
-install_startup_warning_filters()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
