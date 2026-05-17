@@ -774,7 +774,7 @@ cp .env.oauth21 .env
 | <sub>`update_drive_file`</sub> | <sub>Extended</sub> | <sub>Update file metadata, move between folders</sub> |
 | <sub>`manage_drive_access`</sub> | <sub>Extended</sub> | <sub>Grant, update, revoke permissions, and transfer ownership</sub> |
 | <sub>`set_drive_file_permissions`</sub> | <sub>Extended</sub> | <sub>Set link sharing and file-level sharing settings</sub> |
-| <sub>`get_drive_file_permissions`</sub> | <sub>Complete</sub> | <sub>Get detailed file permissions</sub> |
+| <sub>`get_drive_file_permissions`</sub> | <sub>Complete</sub> | <sub>Get file metadata, parents, and permissions</sub> |
 | <sub>`check_drive_file_public_access`</sub> | <sub>Complete</sub> | <sub>Check public sharing status</sub> |
 
 #### 📧 Gmail <sub>[`gmail_tools.py`](gmail/gmail_tools.py)</sub>
