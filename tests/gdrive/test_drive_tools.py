@@ -984,6 +984,38 @@ async def test_list_detailed_true_with_drive_id(mock_resolve_folder):
 
 @pytest.mark.asyncio
 @patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_list_detailed_true_shows_created_and_last_editor(mock_resolve_folder):
+    """detailed=True shows createdTime and lastModifyingUser in list output."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    mock_service.files().list().execute.return_value = {
+        "files": [
+            _make_file(
+                "id4",
+                "Report",
+                "application/vnd.google-apps.document",
+                created="2024-06-01T12:00:00Z",
+                last_modifying_user={
+                    "displayName": "Carol",
+                    "emailAddress": "carol@example.com",
+                },
+            ),
+        ]
+    }
+
+    result = await _unwrap(list_drive_items)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        folder_id="root",
+        detailed=True,
+    )
+
+    assert "Created: 2024-06-01T12:00:00Z" in result
+    assert "Last Edited By: Carol <carol@example.com>" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
 async def test_list_detailed_true_requests_extra_api_fields(mock_resolve_folder):
     """detailed=True passes full fields string to the Drive API."""
     mock_resolve_folder.return_value = "resolved_root"
