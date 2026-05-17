@@ -305,11 +305,7 @@ def _correct_time_format_for_api(
         return None
 
     # Defensive normalization: some LLM-driven MCP clients double-encode JSON
-    # string arguments, passing values like '"2026-05-15T00:00:00Z"' (with
-    # literal quotes inside the string) or the literal string "null"/"None"
-    # instead of omitting the parameter. Strip outer quotes/whitespace and
-    # treat the null sentinels as absent so we don't ship the malformed value
-    # straight to the Calendar API (which would 400 Bad Request).
+    # string arguments, passing values like '"2026-05-15T00:00:00Z"'
     time_str = time_str.strip().strip('"').strip("'").strip()
     if not time_str or time_str.lower() in ("null", "none"):
         return None
