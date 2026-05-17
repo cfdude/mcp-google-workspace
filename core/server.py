@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+# Startup warning filters must be installed before importing FastMCP/Authlib dependencies.
 import asyncio
 import hashlib
 import logging
@@ -5,33 +7,36 @@ import os
 from typing import List, Optional
 from importlib import metadata
 
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from starlette.applications import Starlette
-from starlette.datastructures import MutableHeaders
-from starlette.types import Scope, Receive, Send
-from starlette.requests import Request
-from starlette.middleware import Middleware
+from core.warning_filters import install_startup_warning_filters
 
-from fastmcp import FastMCP
-from fastmcp.server.auth.providers.google import GoogleProvider
+install_startup_warning_filters()
 
-from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
+from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
-from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 from auth.mcp_session_middleware import MCPSessionMiddleware
+from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
+from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 from auth.oauth_responses import (
     create_error_response,
     create_success_response,
     create_server_error_response,
 )
-from auth.auth_info_middleware import AuthInfoMiddleware
-from auth.scopes import BASE_SCOPES, SCOPES, get_current_scopes  # noqa
+from auth.scopes import PROTOCOL_AUTH_SCOPES, SCOPES, get_current_scopes  # noqa
 from core.config import (
     USER_GOOGLE_EMAIL,
     get_transport_mode,
     set_transport_mode as _set_transport_mode,
     get_oauth_redirect_uri as get_oauth_redirect_uri_for_current_mode,
 )
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastmcp import FastMCP
+from fastmcp.server.auth.providers.google import GoogleProvider
+from mcp.types import ToolAnnotations
+from starlette.applications import Starlette
+from starlette.datastructures import MutableHeaders
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.types import Scope, Receive, Send
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -258,7 +263,7 @@ def configure_server_for_http():
             from fastmcp.server.auth.jwt_issuer import derive_jwt_key
 
             provider_valid_scopes: List[str] = sorted(get_current_scopes())
-            provider_required_scopes: List[str] = sorted(BASE_SCOPES)
+            provider_required_scopes: List[str] = sorted(PROTOCOL_AUTH_SCOPES)
 
             client_storage = None
             jwt_signing_key_override = (
@@ -484,6 +489,7 @@ def configure_server_for_http():
                     redirect_path=config.redirect_path,
                     required_scopes=provider_valid_scopes,
                     resource_server_url=config.get_oauth_base_url(),
+                    jwt_signing_key=jwt_signing_key,
                 )
                 server.auth = provider
 
@@ -522,6 +528,13 @@ def configure_server_for_http():
                     provider.client_registration_options.default_scopes = (
                         provider_valid_scopes
                     )
+                # CIMD clients can bypass DCR defaults and fall back to FastMCP's
+                # internal scope string, so keep it aligned with valid scopes too.
+                cimd_default_scope = " ".join(provider_valid_scopes)
+                provider._default_scope_str = cimd_default_scope
+                cimd_manager = getattr(provider, "_cimd_manager", None)
+                if cimd_manager is not None:
+                    cimd_manager.default_scope = cimd_default_scope
                 # Enable protocol-level auth
                 server.auth = provider
                 logger.info(
@@ -657,7 +670,15 @@ async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
         return create_server_error_response(str(e))
 
 
-@server.tool()
+@server.tool(
+    title="Start Google Auth",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 async def start_google_auth(
     service_name: str, user_google_email: str = USER_GOOGLE_EMAIL
 ) -> str:

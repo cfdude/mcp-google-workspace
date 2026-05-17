@@ -19,6 +19,8 @@ from googleapiclient.discovery import build
 from auth.service_decorator import require_google_service
 from core.utils import handle_http_errors, StringList
 
+from mcp.types import ToolAnnotations
+
 from core.server import server
 
 
@@ -302,6 +304,12 @@ def _correct_time_format_for_api(
     if not time_str:
         return None
 
+    # Defensive normalization: some LLM-driven MCP clients double-encode JSON
+    # string arguments, passing values like '"2026-05-15T00:00:00Z"'
+    time_str = time_str.strip().strip('"').strip("'").strip()
+    if not time_str or time_str.lower() in ("null", "none"):
+        return None
+
     logger.info(
         f"_correct_time_format_for_api: Processing {param_name} with value '{time_str}', timezone: '{timezone}'"
     )
@@ -393,7 +401,15 @@ def _strip_utc_offset(datetime_str: str) -> str:
     return re.sub(r"[+-]\d{2}:\d{2}$", "", datetime_str)
 
 
-@server.tool()
+@server.tool(
+    title="List Calendars",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("list_calendars", is_read_only=True, service_type="calendar")
 @require_google_service("calendar", "calendar_read")
 async def list_calendars(service, user_google_email: str) -> str:
@@ -427,7 +443,15 @@ async def list_calendars(service, user_google_email: str) -> str:
     return text_output
 
 
-@server.tool()
+@server.tool(
+    title="Get Events",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("get_events", is_read_only=True, service_type="calendar")
 @require_google_service("calendar", "calendar_read")
 async def get_events(
@@ -1284,7 +1308,15 @@ async def _rsvp_event_impl(
 # ---------------------------------------------------------------------------
 
 
-@server.tool()
+@server.tool(
+    title="Manage Event",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("manage_event", service_type="calendar")
 @require_google_service("calendar", "calendar_events")
 async def manage_event(
@@ -1763,7 +1795,15 @@ async def _delete_ooo_event_impl(
     return confirmation
 
 
-@server.tool()
+@server.tool(
+    title="Manage Out of Office",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("manage_out_of_office", service_type="calendar")
 @require_google_service("calendar", "calendar_events")
 async def manage_out_of_office(
@@ -2227,7 +2267,15 @@ async def _delete_focus_time_event_impl(
     return confirmation
 
 
-@server.tool()
+@server.tool(
+    title="Manage Focus Time",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("manage_focus_time", service_type="calendar")
 @require_google_service("calendar", "calendar_events")
 async def manage_focus_time(
@@ -2341,7 +2389,15 @@ async def manage_focus_time(
 # ---------------------------------------------------------------------------
 
 
-@server.tool()
+@server.tool(
+    title="Query Freebusy",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("query_freebusy", is_read_only=True, service_type="calendar")
 @require_google_service("calendar", "calendar_read")
 async def query_freebusy(
@@ -2449,7 +2505,15 @@ async def query_freebusy(
     return result_text
 
 
-@server.tool()
+@server.tool(
+    title="Create Calendar",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("create_calendar", is_read_only=False, service_type="calendar")
 @require_google_service("calendar", "calendar")
 async def create_calendar(

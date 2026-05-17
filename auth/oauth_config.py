@@ -26,7 +26,10 @@ class OAuthConfig:
     def __init__(self):
         # Base server configuration
         self.base_uri = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
-        self.port = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
+        if os.getenv("WORKSPACE_MCP_RESOLVED_PORT") == "1":
+            self.port = int(os.getenv("WORKSPACE_MCP_PORT", os.getenv("PORT", "8000")))
+        else:
+            self.port = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
         self.base_url = f"{self.base_uri}:{self.port}"
 
         # External URL for reverse proxy scenarios
@@ -81,6 +84,14 @@ class OAuthConfig:
                 "Set GOOGLE_SERVICE_ACCOUNT_KEY_FILE or GOOGLE_SERVICE_ACCOUNT_KEY_JSON, "
                 "but not MCP_ENABLE_OAUTH21=true."
             )
+
+        # Optional per-request impersonation domain allowlist for service accounts.
+        _raw_domains = os.getenv("DWD_ALLOWED_DOMAINS", "")
+        self.dwd_allowed_domains: List[str] = (
+            [d.strip().lower() for d in _raw_domains.split(",") if d.strip()]
+            if self.service_account_enabled and _raw_domains
+            else []
+        )
         # Transport mode (will be set at runtime)
         self._transport_mode = "stdio"  # Default
 

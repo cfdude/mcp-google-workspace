@@ -19,10 +19,13 @@ import httpx
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
+from mcp.types import ToolAnnotations
+
 from auth.service_decorator import require_google_service
 from auth.oauth_config import is_stateless_mode
 from core.attachment_storage import get_attachment_storage, get_attachment_url
 from core.utils import (
+    GOOGLE_API_WRITE_RETRIES,
     IMAGE_MIME_TYPES,
     encode_image_content,
     extract_office_xml_text,
@@ -56,6 +59,7 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_CHUNK_SIZE_BYTES = 256 * 1024  # 256 KB
 UPLOAD_CHUNK_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB (Google recommended minimum)
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB safety limit for URL downloads
+SHARED_DRIVE_ORGANIZER_CONCURRENCY_LIMIT = 10
 
 
 async def _stream_url_with_validation(
@@ -126,7 +130,15 @@ async def _get_file_size(file_obj: BinaryIO) -> int:
     return await asyncio.to_thread(_measure_size)
 
 
-@server.tool()
+@server.tool(
+    title="Search Drive Files",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("search_drive_files", is_read_only=True, service_type="drive")
 @require_google_service("drive", "drive_read")
 async def search_drive_files(
@@ -209,6 +221,7 @@ async def search_drive_files(
         corpora=corpora,
         page_token=page_token,
         detailed=detailed,
+        include_permissions=detailed,
         order_by=order_by,
     )
 
@@ -223,8 +236,42 @@ async def search_drive_files(
     for item in files:
         if detailed:
             size_str = f", Size: {item.get('size', 'N/A')}" if "size" in item else ""
+            created_str = (
+                f", Created: {item['createdTime']}" if item.get("createdTime") else ""
+            )
+            # Last modifying user (not available for all files)
+            lmu = item.get("lastModifyingUser")
+            if lmu:
+                lmu_name = lmu.get("displayName", "")
+                lmu_email = lmu.get("emailAddress", "")
+                if lmu_name and lmu_email:
+                    last_edited_by_str = f", Last Edited By: {lmu_name} <{lmu_email}>"
+                elif lmu_name:
+                    last_edited_by_str = f", Last Edited By: {lmu_name}"
+                elif lmu_email:
+                    last_edited_by_str = f", Last Edited By: {lmu_email}"
+                else:
+                    last_edited_by_str = ""
+            else:
+                last_edited_by_str = ""
+            # Anyone-with-link permission role (reader/commenter/writer)
+            anyone_role_str = ""
+            for perm in item.get("permissions", []):
+                if perm.get("type") == "anyone":
+                    anyone_role_str = (
+                        f", Anyone with link: {perm.get('role', 'unknown')}"
+                    )
+                    break
+            # TODO: "Created By" (original file creator) is not included here.
+            # For Shared Drive files the `owners` field is always empty — the drive
+            # owns the file.  True creator attribution requires fetching revision 1
+            # via files/{id}/revisions and reading its lastModifyingUser.  That adds
+            # one API call per file and should be a separate follow-up.
             formatted_files_text_parts.append(
-                f'- Name: "{item["name"]}" (ID: {item["id"]}, Type: {item["mimeType"]}{size_str}, Modified: {item.get("modifiedTime", "N/A")}) Link: {item.get("webViewLink", "#")}'
+                f'- Name: "{item["name"]}" (ID: {item["id"]}, Type: {item["mimeType"]}{size_str}'
+                f"{created_str}, Modified: {item.get('modifiedTime', 'N/A')}"
+                f"{last_edited_by_str}{anyone_role_str})"
+                f" Link: {item.get('webViewLink', '#')}"
             )
         else:
             formatted_files_text_parts.append(
@@ -236,7 +283,15 @@ async def search_drive_files(
     return text_output
 
 
-@server.tool()
+@server.tool(
+    title="Get Drive File Content",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("get_drive_file_content", is_read_only=True, service_type="drive")
 @require_google_service("drive", "drive_read")
 async def get_drive_file_content(
@@ -346,7 +401,15 @@ async def get_drive_file_content(
     return header + body_text
 
 
-@server.tool()
+@server.tool(
+    title="Get Drive File Download URL",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors(
     "get_drive_file_download_url", is_read_only=True, service_type="drive"
 )
@@ -535,7 +598,15 @@ async def get_drive_file_download_url(
         )
 
 
-@server.tool()
+@server.tool(
+    title="List Drive Items",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("list_drive_items", is_read_only=True, service_type="drive")
 @require_google_service("drive", "drive_read")
 async def list_drive_items(
@@ -550,11 +621,15 @@ async def list_drive_items(
     file_type: Optional[str] = None,
     detailed: bool = True,
     order_by: Optional[str] = None,
+    resource_type: str = "items",
+    query: Optional[str] = None,
+    include_organizers: bool = False,
 ) -> str:
     """
-    Lists files and folders, supporting shared drives.
+    Lists files/folders or shared drive containers, supporting shared drives.
     If `drive_id` is specified, lists items within that shared drive. `folder_id` is then relative to that drive (or use drive_id as folder_id for root).
     If `drive_id` is not specified, lists items from user's "My Drive" and accessible shared drives (if `include_items_from_all_drives` is True).
+    Set `resource_type` to "shared_drives" to list shared drive containers instead of folder contents.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
@@ -575,14 +650,35 @@ async def list_drive_items(
                                   'name', 'name_natural', 'quotaBytesUsed', 'recency', 'sharedWithMeTime',
                                   'starred', 'viewedByMeTime'. Example: 'modifiedTime desc' or 'folder,modifiedTime desc,name'.
                                   Defaults to None (Drive API default ordering).
+        resource_type (str): What to list. Use "items" for folder contents or
+                             "shared_drives" for shared drive containers. Defaults to "items".
+        query (Optional[str]): Shared drive query used only when resource_type="shared_drives",
+                               e.g. "name contains 'Engineering'".
+        include_organizers (bool): When resource_type="shared_drives", include principals
+                                   with the organizer role. This costs one extra permissions.list
+                                   API call per shared drive returned. Defaults to False.
 
     Returns:
-        str: A formatted list of files/folders in the specified folder.
+        str: A formatted list of files/folders in the specified folder or shared drives.
              Includes a nextPageToken line when more results are available.
     """
     logger.info(
-        f"[list_drive_items] Invoked. Email: '{user_google_email}', Folder ID: '{folder_id}', File Type: '{file_type}'"
+        f"[list_drive_items] Invoked. Email: '{user_google_email}', Folder ID: '{folder_id}', "
+        f"File Type: '{file_type}', Resource Type: '{resource_type}'"
     )
+
+    normalized_resource_type = resource_type.lower().strip()
+    if normalized_resource_type == "shared_drives":
+        return await _list_shared_drives_impl(
+            service=service,
+            user_google_email=user_google_email,
+            page_size=page_size,
+            page_token=page_token,
+            query=query,
+            include_organizers=include_organizers,
+        )
+    if normalized_resource_type != "items":
+        raise ValueError("resource_type must be either 'items' or 'shared_drives'")
 
     resolved_folder_id = await resolve_folder_id(service, folder_id)
     final_query = f"'{resolved_folder_id}' in parents and trashed=false"
@@ -616,8 +712,31 @@ async def list_drive_items(
     for item in files:
         if detailed:
             size_str = f", Size: {item.get('size', 'N/A')}" if "size" in item else ""
+            drive_id_str = (
+                f", Drive ID: {item['driveId']}" if item.get("driveId") else ""
+            )
+            created_str = (
+                f", Created: {item['createdTime']}" if item.get("createdTime") else ""
+            )
+            lmu = item.get("lastModifyingUser")
+            if lmu:
+                lmu_name = lmu.get("displayName", "")
+                lmu_email = lmu.get("emailAddress", "")
+                if lmu_name and lmu_email:
+                    last_edited_by_str = f", Last Edited By: {lmu_name} <{lmu_email}>"
+                elif lmu_name:
+                    last_edited_by_str = f", Last Edited By: {lmu_name}"
+                elif lmu_email:
+                    last_edited_by_str = f", Last Edited By: {lmu_email}"
+                else:
+                    last_edited_by_str = ""
+            else:
+                last_edited_by_str = ""
             formatted_items_text_parts.append(
-                f'- Name: "{item["name"]}" (ID: {item["id"]}, Type: {item["mimeType"]}{size_str}, Modified: {item.get("modifiedTime", "N/A")}) Link: {item.get("webViewLink", "#")}'
+                f'- Name: "{item["name"]}" (ID: {item["id"]}, Type: {item["mimeType"]}{size_str}'
+                f"{created_str}, Modified: {item.get('modifiedTime', 'N/A')}"
+                f"{last_edited_by_str}{drive_id_str})"
+                f" Link: {item.get('webViewLink', '#')}"
             )
         else:
             formatted_items_text_parts.append(
@@ -627,6 +746,129 @@ async def list_drive_items(
         formatted_items_text_parts.append(f"nextPageToken: {next_token}")
     text_output = "\n".join(formatted_items_text_parts)
     return text_output
+
+
+async def _list_shared_drives_impl(
+    service,
+    user_google_email: str,
+    page_size: int = 100,
+    page_token: Optional[str] = None,
+    query: Optional[str] = None,
+    include_organizers: bool = False,
+) -> str:
+    """List shared drives available to the authenticated user."""
+    logger.info(
+        f"[list_shared_drives] Invoked. Email: '{user_google_email}', page_size: {page_size}, "
+        f"include_organizers: {include_organizers}"
+    )
+
+    list_params: Dict[str, Any] = {
+        "pageSize": min(max(page_size, 1), 100),
+        "fields": (
+            "drives(id, name, createdTime, hidden, "
+            "restrictions, capabilities(canManageMembers, canEdit)), "
+            "nextPageToken"
+        ),
+    }
+    if page_token:
+        list_params["pageToken"] = page_token
+    if query:
+        list_params["q"] = query
+
+    results = await asyncio.to_thread(service.drives().list(**list_params).execute)
+    drives = results.get("drives", [])
+    if not drives:
+        return f"No shared drives found for {user_google_email}."
+
+    if include_organizers:
+
+        async def _fetch_organizers(d: Dict[str, Any]) -> None:
+            try:
+                permissions = []
+                next_permission_page_token = None
+
+                while True:
+                    list_kwargs: Dict[str, Any] = {
+                        "fileId": d["id"],
+                        "supportsAllDrives": True,
+                        "useDomainAdminAccess": False,
+                        "fields": (
+                            "nextPageToken, "
+                            "permissions(emailAddress, displayName, role, type, domain)"
+                        ),
+                        "pageSize": 100,
+                    }
+                    if next_permission_page_token:
+                        list_kwargs["pageToken"] = next_permission_page_token
+
+                    perms = await asyncio.to_thread(
+                        service.permissions().list(**list_kwargs).execute
+                    )
+                    permissions.extend(perms.get("permissions", []))
+
+                    next_permission_page_token = perms.get("nextPageToken")
+                    if not next_permission_page_token:
+                        break
+
+                d["_organizers"] = [
+                    p for p in permissions if p.get("role") == "organizer"
+                ]
+            except HttpError as e:
+                status = getattr(e, "status_code", None)
+                if status is None and getattr(e, "resp", None) is not None:
+                    status = getattr(e.resp, "status", None)
+                reason = getattr(e, "reason", None) or str(e)
+                d["_organizers_error"] = f"{status or 'unknown'}: {reason}"
+
+        organizer_fetch_sem = asyncio.Semaphore(
+            SHARED_DRIVE_ORGANIZER_CONCURRENCY_LIMIT
+        )
+
+        async def _bounded_fetch_organizers(d: Dict[str, Any]) -> None:
+            async with organizer_fetch_sem:
+                await _fetch_organizers(d)
+
+        await asyncio.gather(*[_bounded_fetch_organizers(d) for d in drives])
+
+    next_token = results.get("nextPageToken")
+    parts = [f"Found {len(drives)} shared drives for {user_google_email}:"]
+    for d in drives:
+        caps = d.get("capabilities") or {}
+        rest = d.get("restrictions") or {}
+        cap_flags = ", ".join(k for k, v in caps.items() if v) or "none"
+        rest_flags = ", ".join(k for k, v in rest.items() if v) or "none"
+        hidden = " [hidden]" if d.get("hidden") else ""
+        parts.append(
+            f'- Name: "{d["name"]}" (ID: {d["id"]}, Created: {d.get("createdTime", "N/A")}){hidden} '
+            f"Capabilities: {cap_flags}; Restrictions: {rest_flags}"
+        )
+        if include_organizers:
+            err = d.get("_organizers_error")
+            if err:
+                parts.append(f"  Organizers: <error: {err}>")
+            else:
+                organizers = d.get("_organizers", [])
+                if not organizers:
+                    parts.append("  Organizers: <none returned>")
+                else:
+                    for o in organizers:
+                        identifier = (
+                            o.get("emailAddress")
+                            or o.get("domain")
+                            or o.get("displayName")
+                            or o.get("type", "?")
+                        )
+                        display = o.get("displayName")
+                        kind = o.get("type", "?")
+                        suffix = (
+                            f' ("{display}")'
+                            if display and display != identifier
+                            else ""
+                        )
+                        parts.append(f"  Organizer ({kind}): {identifier}{suffix}")
+    if next_token:
+        parts.append(f"nextPageToken: {next_token}")
+    return "\n".join(parts)
 
 
 async def _create_drive_folder_impl(
@@ -658,7 +900,15 @@ async def _create_drive_folder_impl(
     )
 
 
-@server.tool()
+@server.tool(
+    title="Create Drive Folder",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("create_drive_folder", service_type="drive")
 @require_google_service("drive", "drive_file")
 async def create_drive_folder(
@@ -687,7 +937,15 @@ async def create_drive_folder(
     )
 
 
-@server.tool()
+@server.tool(
+    title="Create Drive File",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("create_drive_file", service_type="drive")
 @require_google_service("drive", "drive_file")
 async def create_drive_file(
@@ -801,7 +1059,8 @@ async def create_drive_file(
                     fields="id, name, webViewLink",
                     supportsAllDrives=True,
                 )
-                .execute
+                .execute,
+                num_retries=GOOGLE_API_WRITE_RETRIES,
             )
         # Handle HTTP/HTTPS URLs
         elif parsed_url.scheme in ("http", "https"):
@@ -840,7 +1099,8 @@ async def create_drive_file(
                             fields="id, name, webViewLink",
                             supportsAllDrives=True,
                         )
-                        .execute
+                        .execute,
+                        num_retries=GOOGLE_API_WRITE_RETRIES,
                     )
             else:
                 # Stream download to temp file with SSRF protection, then upload
@@ -887,7 +1147,8 @@ async def create_drive_file(
                             fields="id, name, webViewLink",
                             supportsAllDrives=True,
                         )
-                        .execute
+                        .execute,
+                        num_retries=GOOGLE_API_WRITE_RETRIES,
                     )
         else:
             if not parsed_url.scheme:
@@ -909,7 +1170,8 @@ async def create_drive_file(
                 fields="id, name, webViewLink",
                 supportsAllDrives=True,
             )
-            .execute
+            .execute,
+            num_retries=GOOGLE_API_WRITE_RETRIES,
         )
 
     link = created_file.get("webViewLink", "No link available")
@@ -951,7 +1213,15 @@ def _detect_source_format(file_name: str, content: Optional[str] = None) -> str:
     return "text/plain"
 
 
-@server.tool()
+@server.tool(
+    title="Import to Google Doc",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("import_to_google_doc", service_type="drive")
 @require_google_service("drive", "drive_file")
 async def import_to_google_doc(
@@ -969,12 +1239,14 @@ async def import_to_google_doc(
 
     Google Drive automatically converts the source file to native Google Docs format,
     preserving formatting like headings, lists, bold, italic, etc.
+    For batch operations, prefer file_path for files on disk so callers do not need
+    to load full file contents into their context.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         file_name (str): The name for the new Google Doc (extension will be ignored).
-        content (Optional[str]): Text content for text-based formats (MD, TXT, HTML).
-        file_path (Optional[str]): Local file path for binary formats (DOCX, ODT). Supports file:// URLs.
+        content (Optional[str]): Text content for text-based formats. Use only for short snippets or content already in memory.
+        file_path (Optional[str]): Local file path or file:// URL for any supported format (MD, TXT, HTML, DOCX, ODT, RTF). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
         file_url (Optional[str]): Remote URL to fetch the file from (http/https).
         source_format (Optional[str]): Source format hint ('md', 'markdown', 'docx', 'txt', 'html', 'rtf', 'odt').
                                        Auto-detected from file_name extension if not provided.
@@ -984,6 +1256,9 @@ async def import_to_google_doc(
         str: Confirmation message with the new Google Doc link.
 
     Examples:
+        # Import a markdown file from disk (preferred for batch operations)
+        import_to_google_doc(file_name="My Doc.md", file_path="/path/to/my-doc.md", source_format="md")
+
         # Import markdown content directly
         import_to_google_doc(file_name="My Doc.md", content="# Title\\n\\nHello **world**")
 
@@ -1134,7 +1409,8 @@ async def import_to_google_doc(
                     fields="id, name, webViewLink, mimeType",
                     supportsAllDrives=True,
                 )
-                .execute
+                .execute,
+                num_retries=GOOGLE_API_WRITE_RETRIES,
             )
     else:
         media = MediaIoBaseUpload(
@@ -1157,7 +1433,8 @@ async def import_to_google_doc(
                 fields="id, name, webViewLink, mimeType",
                 supportsAllDrives=True,
             )
-            .execute
+            .execute,
+            num_retries=GOOGLE_API_WRITE_RETRIES,
         )
 
     result_mime = created_file.get("mimeType", "unknown")
@@ -1182,7 +1459,15 @@ async def import_to_google_doc(
     return confirmation
 
 
-@server.tool()
+@server.tool(
+    title="Get Drive File Permissions",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors(
     "get_drive_file_permissions", is_read_only=True, service_type="drive"
 )
@@ -1193,14 +1478,15 @@ async def get_drive_file_permissions(
     file_id: str,
 ) -> str:
     """
-    Gets detailed metadata about a Google Drive file including sharing permissions.
+    Gets detailed metadata about a Google Drive file including sharing permissions,
+    parent folder IDs, ownership, and lifecycle timestamps.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         file_id (str): The ID of the file to check permissions for.
 
     Returns:
-        str: Detailed file metadata including sharing status and URLs.
+        str: Detailed file metadata including parents, owners, timestamps, sharing status, and URLs.
     """
     logger.info(
         f"[get_drive_file_permissions] Checking file {file_id} for {user_google_email}"
@@ -1215,7 +1501,8 @@ async def get_drive_file_permissions(
             service.files()
             .get(
                 fileId=file_id,
-                fields="id, name, mimeType, size, modifiedTime, owners, "
+                fields="id, name, mimeType, size, parents, createdTime, modifiedTime, "
+                "trashed, driveId, owners(displayName,emailAddress), "
                 "permissions(id, type, role, emailAddress, domain, expirationTime, permissionDetails), "
                 "webViewLink, webContentLink, shared, sharingUser, viewersCanCopyContent",
                 supportsAllDrives=True,
@@ -1224,16 +1511,44 @@ async def get_drive_file_permissions(
         )
 
         # Format the response
+        parents = file_metadata.get("parents")
+        parent_str = ", ".join(parents) if parents else "None (root or orphaned)"
+        owners = file_metadata.get("owners") or []
+        if owners:
+            owner_str = ", ".join(
+                (
+                    f"{owner.get('displayName') or owner.get('name') or 'Unknown'} "
+                    f"({owner.get('emailAddress') or owner.get('email')})"
+                )
+                if (owner.get("emailAddress") or owner.get("email"))
+                else owner.get("displayName") or owner.get("name") or "Unknown"
+                for owner in owners
+            )
+        else:
+            owner_str = "None available"
+
         output_parts = [
             f"File: {file_metadata.get('name', 'Unknown')}",
             f"ID: {file_id}",
             f"Type: {file_metadata.get('mimeType', 'Unknown')}",
+            f"Parents: {parent_str}",
+            f"Owners: {owner_str}",
             f"Size: {file_metadata.get('size', 'N/A')} bytes",
+            f"Created: {file_metadata.get('createdTime', 'N/A')}",
             f"Modified: {file_metadata.get('modifiedTime', 'N/A')}",
-            "",
-            "Sharing Status:",
-            f"  Shared: {file_metadata.get('shared', False)}",
+            f"Trashed: {file_metadata.get('trashed', False)}",
         ]
+
+        if file_metadata.get("driveId"):
+            output_parts.append(f"Shared Drive ID: {file_metadata['driveId']}")
+
+        output_parts.extend(
+            [
+                "",
+                "Sharing Status:",
+                f"  Shared: {file_metadata.get('shared', False)}",
+            ]
+        )
 
         # Add sharing user if available
         sharing_user = file_metadata.get("sharingUser")
@@ -1291,7 +1606,15 @@ async def get_drive_file_permissions(
         return f"Error getting file permissions: {e}"
 
 
-@server.tool()
+@server.tool(
+    title="Check Drive File Public Access",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors(
     "check_drive_file_public_access", is_read_only=True, service_type="drive"
 )
@@ -1300,6 +1623,7 @@ async def check_drive_file_public_access(
     service,
     user_google_email: str,
     file_name: str,
+    drive_id: Optional[str] = None,
 ) -> str:
     """
     Searches for a file by name and checks if it has public link sharing enabled.
@@ -1307,23 +1631,34 @@ async def check_drive_file_public_access(
     Args:
         user_google_email (str): The user's Google email address. Required.
         file_name (str): The name of the file to check.
+        drive_id (Optional[str]): ID of the shared drive to scope the search to. When set, the
+                                  underlying files.list call uses corpora='drive' and the given
+                                  driveId, which is required to reliably find files that live only
+                                  in that shared drive. When None, behaviour is unchanged
+                                  (default API corpora applies).
 
     Returns:
         str: Information about the file's sharing status and whether it can be used in Google Docs.
     """
-    logger.info(f"[check_drive_file_public_access] Searching for {file_name}")
+    logger.info(
+        f"[check_drive_file_public_access] Searching for {file_name}"
+        + (f" within drive_id={drive_id}" if drive_id else "")
+    )
 
     # Search for the file
     escaped_name = file_name.replace("'", "\\'")
     query = f"name = '{escaped_name}'"
 
-    list_params = {
+    list_params: Dict[str, Any] = {
         "q": query,
         "pageSize": 10,
         "fields": "files(id, name, mimeType, webViewLink)",
         "supportsAllDrives": True,
         "includeItemsFromAllDrives": True,
     }
+    if drive_id:
+        list_params["corpora"] = "drive"
+        list_params["driveId"] = drive_id
 
     results = await asyncio.to_thread(service.files().list(**list_params).execute)
 
@@ -1388,7 +1723,15 @@ async def check_drive_file_public_access(
     return "\n".join(output_parts)
 
 
-@server.tool()
+@server.tool(
+    title="Update Drive File",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("update_drive_file", is_read_only=False, service_type="drive")
 @require_google_service("drive", "drive_file")
 async def update_drive_file(
@@ -1565,7 +1908,15 @@ async def update_drive_file(
     return "\n".join(output_parts)
 
 
-@server.tool()
+@server.tool(
+    title="Get Drive Shareable Link",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("get_drive_shareable_link", is_read_only=True, service_type="drive")
 @require_google_service("drive", "drive_read")
 async def get_drive_shareable_link(
@@ -1625,7 +1976,15 @@ async def get_drive_shareable_link(
     return "\n".join(output_parts)
 
 
-@server.tool()
+@server.tool(
+    title="Manage Drive Access",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("manage_drive_access", is_read_only=False, service_type="drive")
 @require_google_service("drive", "drive_file")
 async def manage_drive_access(
@@ -1992,7 +2351,15 @@ async def manage_drive_access(
     return "\n".join(output_parts)
 
 
-@server.tool()
+@server.tool(
+    title="Copy Drive File",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors("copy_drive_file", is_read_only=False, service_type="drive")
 @require_google_service("drive", "drive_file")
 async def copy_drive_file(
@@ -2064,7 +2431,15 @@ async def copy_drive_file(
     return "\n".join(output_parts)
 
 
-@server.tool()
+@server.tool(
+    title="Set Drive File Permissions",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 @handle_http_errors(
     "set_drive_file_permissions", is_read_only=False, service_type="drive"
 )
