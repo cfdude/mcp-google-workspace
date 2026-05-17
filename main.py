@@ -414,25 +414,48 @@ def main():
     external_url = os.getenv("WORKSPACE_EXTERNAL_URL")
     display_url = external_url if external_url else f"{base_uri}:{port}"
 
-    safe_print("🔧 Google Workspace MCP Server")
-    safe_print("=" * 35)
-    safe_print("📋 Server Information:")
     try:
         version = metadata.version("workspace-mcp")
     except metadata.PackageNotFoundError:
         version = "dev"
-    safe_print(f"   📦 Version: {version}")
-    safe_print(f"   🌐 Transport: {args.transport}")
+
+    mode = "single-user" if args.single_user else "multi-user"
+    pyver = sys.version.split()[0]
+
+    # ANSI color codes for Google brand colors
+    B = "\033[1;34m"  # Blue
+    R = "\033[1;31m"  # Red
+    Y = "\033[1;33m"  # Yellow
+    G = "\033[1;32m"  # Green
+    W = "\033[1;37m"  # White
+    C = "\033[0;36m"  # Cyan
+    D = "\033[0;90m"  # Dim
+    RST = "\033[0m"   # Reset
+
+    info_lines = [f"{C}{args.transport}  ·  {mode}{RST}"]
     if args.transport == "streamable-http":
-        safe_print(f"   🔗 URL: {display_url}")
-        safe_print(f"   🔐 OAuth Callback: {display_url}/oauth2callback")
-    safe_print(f"   👤 Mode: {'Single-user' if args.single_user else 'Multi-user'}")
+        info_lines.append(f"{C}{display_url}{RST}")
     if args.read_only:
-        safe_print("   🔒 Read-Only: Enabled")
+        info_lines.append(f"{Y}read-only{RST}")
     if args.permissions:
-        safe_print("   🔒 Permissions: Granular mode")
-    safe_print(f"   🐍 Python: {sys.version.split()[0]}")
-    safe_print("")
+        info_lines.append(f"{Y}granular permissions{RST}")
+
+    banner = (
+        f"\n{D}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RST}\n"
+        f"\n"
+        f"     {B}██████{R}╗{RST}       {W}Google Workspace{RST}\n"
+        f"     {B}██{RST}╔════╝       {W}MCP Server{RST}  {C}v{version}{RST}\n"
+        f"     {B}██{RST}║  {Y}███{RST}╗\n"
+        f"     {B}██{RST}║   {Y}██{RST}║      {info_lines[0]}\n"
+        f"     {B}╚█████{G}█╔╝{RST}      {C}Python {pyver}{RST}\n"
+        f"      {B}╚════{G}═╝{RST}"
+    )
+    for line in info_lines[1:]:
+        banner += f"\n                       {line}"
+    banner += (
+        f"\n\n{D}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RST}\n"
+    )
+    safe_print(banner)
 
     # Active Configuration
     safe_print("⚙️ Active Configuration:")
@@ -795,6 +818,7 @@ def main():
                 host=host,
                 port=port,
                 stateless_http=is_stateless_mode(),
+                show_banner=False,
             )
         else:
             if http_port is not None:
@@ -833,7 +857,7 @@ def main():
                         )
 
                     try:
-                        await server.run_stdio_async()
+                        await server.run_stdio_async(show_banner=False)
                     finally:
                         if http_srv:
                             http_srv.should_exit = True
@@ -853,7 +877,7 @@ def main():
 
                 asyncio.run(_run_dual())
             else:
-                server.run()
+                server.run(show_banner=False)
     except KeyboardInterrupt:
         safe_print("\n👋 Server shutdown requested")
         # Clean up OAuth callback server if running

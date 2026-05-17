@@ -5,6 +5,7 @@ import os
 from typing import List, Optional
 from importlib import metadata
 
+from core.warning_filters import install_startup_warning_filters
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
@@ -13,6 +14,8 @@ from starlette.requests import Request
 from starlette.middleware import Middleware
 
 from mcp.types import ToolAnnotations
+
+install_startup_warning_filters()
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
