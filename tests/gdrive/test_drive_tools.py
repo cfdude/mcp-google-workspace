@@ -70,7 +70,7 @@ async def test_get_drive_file_permissions_includes_owner_details(mock_resolve_it
     )
 
     fields = mock_service.files.return_value.get.call_args.kwargs["fields"]
-    assert "owners" in fields
+    assert "owners(displayName,emailAddress)" in fields
     assert (
         "Owners: Ada Lovelace (ada@example.com), Legacy Owner (legacy@example.com)"
         in result
@@ -473,7 +473,7 @@ async def test_create_drive_folder():
 
 
 def test_build_params_detailed_true_includes_extra_fields():
-    """detailed=True requests modifiedTime, webViewLink, size, driveId, and new metadata from the API."""
+    """detailed=True requests metadata fields but omits ACLs by default."""
     params = build_drive_list_params(query="name='x'", page_size=10, detailed=True)
     assert "modifiedTime" in params["fields"]
     assert "webViewLink" in params["fields"]
@@ -481,6 +481,14 @@ def test_build_params_detailed_true_includes_extra_fields():
     assert "driveId" in params["fields"]
     assert "createdTime" in params["fields"]
     assert "lastModifyingUser" in params["fields"]
+    assert "permissions" not in params["fields"]
+
+
+def test_build_params_include_permissions_requests_acl_fields():
+    """ACL fields are requested only when explicitly needed by the caller."""
+    params = build_drive_list_params(
+        query="name='x'", page_size=10, detailed=True, include_permissions=True
+    )
     assert "permissions" in params["fields"]
 
 
@@ -994,6 +1002,7 @@ async def test_list_detailed_true_requests_extra_api_fields(mock_resolve_folder)
     assert "webViewLink" in call_kwargs["fields"]
     assert "size" in call_kwargs["fields"]
     assert "driveId" in call_kwargs["fields"]
+    assert "permissions" not in call_kwargs["fields"]
 
 
 @pytest.mark.asyncio

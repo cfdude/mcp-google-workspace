@@ -221,6 +221,7 @@ async def search_drive_files(
         corpora=corpora,
         page_token=page_token,
         detailed=detailed,
+        include_permissions=detailed,
         order_by=order_by,
     )
 
@@ -1481,7 +1482,7 @@ async def get_drive_file_permissions(
             .get(
                 fileId=file_id,
                 fields="id, name, mimeType, size, parents, createdTime, modifiedTime, "
-                "trashed, driveId, owners, "
+                "trashed, driveId, owners(displayName,emailAddress), "
                 "permissions(id, type, role, emailAddress, domain, expirationTime, permissionDetails), "
                 "webViewLink, webContentLink, shared, sharingUser, viewersCanCopyContent",
                 supportsAllDrives=True,
