@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+# Startup warning filters must be installed before importing FastMCP/Authlib dependencies.
 import asyncio
 import hashlib
 import logging
