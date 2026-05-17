@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PREFERRED_PORT = 8000
 DEFAULT_FALLBACK_COUNT = 4
+RESOLVED_PORT_ENV = "WORKSPACE_MCP_RESOLVED_PORT"
 
 
 class NoAvailablePortError(RuntimeError):
@@ -120,6 +121,7 @@ def resolve_port(
                     candidates,
                 )
             os.environ["WORKSPACE_MCP_PORT"] = str(port)
+            os.environ[RESOLVED_PORT_ENV] = "1"
             return port
 
     raise NoAvailablePortError(

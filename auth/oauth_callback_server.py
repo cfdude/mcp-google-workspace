@@ -18,6 +18,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 from auth.scopes import SCOPES, get_current_scopes  # noqa
 from auth.oauth_responses import (
@@ -198,6 +200,42 @@ class MinimalOAuthServer:
         other_path = other_parsed.path.rstrip("/") or ""
         return self_path == other_path
 
+    def _callback_endpoint_looks_like_workspace(self, hostname: str) -> bool:
+        """
+        Probe an occupied callback port for this app's OAuth callback handler.
+
+        This is intentionally only used after bind returns EADDRINUSE in stdio
+        mode. A no-code request to our handler returns the shared
+        "Authentication Error" page with HTTP 400, which is enough to distinguish
+        the boot-time workspace callback listener from a random local process.
+        """
+        try:
+            parsed_uri = urlparse(self.base_uri)
+            scheme = parsed_uri.scheme or "http"
+            if scheme not in {"http", "https"}:
+                return False
+            probe_host = hostname
+            if probe_host in {"0.0.0.0", "::"}:
+                probe_host = "127.0.0.1"
+            if ":" in probe_host and not probe_host.startswith("["):
+                probe_host = f"[{probe_host}]"
+            base_path = parsed_uri.path.rstrip("/")
+            probe_url = f"{scheme}://{probe_host}:{self.port}{base_path}/oauth2callback"
+
+            try:
+                with urlopen(probe_url, timeout=1.0) as response:
+                    status_code = response.status
+                    body = response.read(4096).decode("utf-8", errors="replace")
+            except HTTPError as exc:
+                status_code = exc.code
+                body = exc.read(4096).decode("utf-8", errors="replace")
+
+            return status_code in {200, 400} and (
+                "Authentication Error" in body or "Authentication Successful" in body
+            )
+        except (OSError, URLError, ValueError):
+            return False
+
     def start(self) -> tuple[bool, str]:
         """
         Start the minimal OAuth server.
@@ -228,7 +266,17 @@ class MinimalOAuthServer:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind((hostname, self.port))
-        except OSError:
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE and self._callback_endpoint_looks_like_workspace(
+                hostname
+            ):
+                logger.info(
+                    "OAuth callback server already available on %s:%s; reusing existing listener",
+                    hostname,
+                    self.port,
+                )
+                self.is_running = True
+                return True, ""
             error_msg = f"Port {self.port} is already in use on {hostname}. Cannot start minimal OAuth server."
             logger.error(error_msg)
             return False, error_msg

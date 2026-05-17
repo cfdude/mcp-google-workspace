@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str) -> int:
     if name == "WORKSPACE_MCP_PORT":
+        if os.getenv("WORKSPACE_MCP_RESOLVED_PORT") == "1":
+            return int(os.getenv("WORKSPACE_MCP_PORT", os.getenv("PORT", "8000")))
         return int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

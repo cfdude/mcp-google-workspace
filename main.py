@@ -95,6 +95,32 @@ logger = logging.getLogger(__name__)
 
 configure_file_logging()
 
+
+def resolve_stdio_callback_port() -> None:
+    """
+    Late-bind the legacy stdio OAuth callback port.
+
+    Streamable HTTP/OAuth 2.1 owns its main HTTP port directly and must keep the
+    normal PORT/WORKSPACE_MCP_PORT semantics. The fallback range only exists for
+    the standalone stdio callback listener.
+    """
+    from auth.port_resolver import resolve_port, NoAvailablePortError, PortConfigError
+
+    try:
+        resolve_port()
+    except (NoAvailablePortError, PortConfigError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    reload_oauth_config()
+
+
+def resolve_callback_port_for_transport(transport: str) -> None:
+    """Apply callback port fallback only to legacy stdio transport."""
+    if transport == "stdio":
+        resolve_stdio_callback_port()
+    else:
+        os.environ.pop("WORKSPACE_MCP_RESOLVED_PORT", None)
+
 # Single source of truth: service name -> module path.
 # VALID_SERVICES is derived from this mapping.
 SERVICE_MODULES = {
@@ -375,21 +401,13 @@ def main():
         )
         sys.exit(1)
 
-    # Late-bind the OAuth callback port: probe preferred + fallback range and
-    # mutate WORKSPACE_MCP_PORT in os.environ to the first-available value.
-    # Then refresh the OAuthConfig singleton so its redirect_uri reflects the
-    # bound port. See auth/port_resolver.py for the architectural rationale.
-    from auth.port_resolver import resolve_port, NoAvailablePortError, PortConfigError
-
-    try:
-        resolve_port()
-    except (NoAvailablePortError, PortConfigError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-    reload_oauth_config()
+    resolve_callback_port_for_transport(args.transport)
 
     # Set port and base URI once for reuse throughout the function
-    port = int(os.getenv("WORKSPACE_MCP_PORT", "8000"))
+    if os.getenv("WORKSPACE_MCP_RESOLVED_PORT") == "1":
+        port = int(os.getenv("WORKSPACE_MCP_PORT", os.getenv("PORT", "8000")))
+    else:
+        port = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", "8000")))
     base_uri = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
     host = os.getenv("WORKSPACE_MCP_HOST", "0.0.0.0")
     external_url = os.getenv("WORKSPACE_EXTERNAL_URL")

@@ -19,6 +19,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.delenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", raising=False)
     monkeypatch.delenv("WORKSPACE_MCP_HOST", raising=False)
+    monkeypatch.delenv("WORKSPACE_MCP_RESOLVED_PORT", raising=False)
 
 
 @contextmanager
@@ -51,6 +52,7 @@ def test_resolves_preferred_when_free():
     bound = pr.resolve_port(preferred=p, fallback_count=2, host="127.0.0.1")
     assert bound == p
     assert os.environ["WORKSPACE_MCP_PORT"] == str(p)
+    assert os.environ["WORKSPACE_MCP_RESOLVED_PORT"] == "1"
 
 
 def test_falls_back_when_preferred_in_use():
@@ -120,3 +122,23 @@ def test_lazy_workspace_mcp_port_via_pep562(monkeypatch):
     assert cfg.WORKSPACE_MCP_PORT == 8009
     monkeypatch.setenv("WORKSPACE_MCP_PORT", "8011")
     assert cfg.WORKSPACE_MCP_PORT == 8011
+
+
+def test_lazy_workspace_mcp_port_prefers_resolved_workspace_env(monkeypatch):
+    """WORKSPACE_MCP_PORT is authoritative after the resolver mutates it."""
+    monkeypatch.setenv("PORT", "8000")
+    monkeypatch.setenv("WORKSPACE_MCP_PORT", "8011")
+    monkeypatch.setenv("WORKSPACE_MCP_RESOLVED_PORT", "1")
+    cfg = _import_fresh("core.config")
+    assert cfg.WORKSPACE_MCP_PORT == 8011
+
+
+def test_lazy_workspace_mcp_port_preserves_port_precedence_without_resolver(
+    monkeypatch,
+):
+    """HTTP/OAuth 2.1 mode keeps existing PORT precedence when no stdio resolver ran."""
+    monkeypatch.setenv("PORT", "8000")
+    monkeypatch.setenv("WORKSPACE_MCP_PORT", "8011")
+    monkeypatch.delenv("WORKSPACE_MCP_RESOLVED_PORT", raising=False)
+    cfg = _import_fresh("core.config")
+    assert cfg.WORKSPACE_MCP_PORT == 8000
