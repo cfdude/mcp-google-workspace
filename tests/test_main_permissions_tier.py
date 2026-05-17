@@ -50,10 +50,12 @@ def test_narrow_permissions_to_services_drops_non_selected_services():
     assert narrowed == {"gmail": "send"}
 
 
-def test_resolve_stdio_callback_port_marks_resolved_port(monkeypatch):
-    calls = []
+def test_resolve_stdio_callback_port_marks_resolved_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
 
-    def fake_resolve_port():
+    def fake_resolve_port() -> None:
         calls.append("resolve")
         monkeypatch.setenv("WORKSPACE_MCP_PORT", "8123")
         monkeypatch.setenv("WORKSPACE_MCP_RESOLVED_PORT", "1")
@@ -67,8 +69,10 @@ def test_resolve_stdio_callback_port_marks_resolved_port(monkeypatch):
     assert os.environ["WORKSPACE_MCP_RESOLVED_PORT"] == "1"
 
 
-def test_resolve_callback_port_for_transport_skips_streamable_http(monkeypatch):
-    def fail_if_called():
+def test_resolve_callback_port_for_transport_skips_streamable_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called() -> None:
         raise AssertionError("stdio port resolver must not run for streamable HTTP")
 
     monkeypatch.setattr(main, "resolve_stdio_callback_port", fail_if_called)

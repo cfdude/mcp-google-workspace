@@ -46,6 +46,7 @@ class MinimalOAuthServer:
         self.server = None
         self.server_thread = None
         self.is_running = False
+        self._reusing_external_listener = False
 
         # Setup the callback route
         self._setup_callback_route()
@@ -276,10 +277,13 @@ class MinimalOAuthServer:
                     self.port,
                 )
                 self.is_running = True
+                self._reusing_external_listener = True
                 return True, ""
             error_msg = f"Port {self.port} is already in use on {hostname}. Cannot start minimal OAuth server."
             logger.error(error_msg)
             return False, error_msg
+
+        self._reusing_external_listener = False
 
         def run_server():
             """Run the server in a separate thread."""
@@ -328,6 +332,12 @@ class MinimalOAuthServer:
         if not self.is_running:
             return
 
+        if self._reusing_external_listener:
+            self.is_running = False
+            self._reusing_external_listener = False
+            logger.info("Minimal OAuth server external listener reuse released")
+            return
+
         try:
             if self.server:
                 if hasattr(self.server, "should_exit"):
@@ -337,6 +347,7 @@ class MinimalOAuthServer:
                 self.server_thread.join(timeout=3.0)
 
             self.is_running = False
+            self._reusing_external_listener = False
             logger.info("Minimal OAuth server stopped")
 
         except Exception as e:

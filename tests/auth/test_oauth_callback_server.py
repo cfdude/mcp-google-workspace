@@ -1,5 +1,8 @@
 import errno
+from types import TracebackType
+from typing import Any, Optional, Tuple, Type
 
+import pytest
 from starlette.testclient import TestClient
 
 from auth import oauth_callback_server
@@ -142,20 +145,27 @@ def test_ensure_oauth_callback_skips_start_when_other_instance_owns_port(monkeyp
     assert _PortInUseServer.instances[0].start_calls == 0
 
 
-def test_start_reuses_existing_workspace_callback_on_eaddrinuse(monkeypatch):
+def test_start_reuses_existing_workspace_callback_on_eaddrinuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = oauth_callback_server.MinimalOAuthServer(8000, "http://localhost")
 
     class _FakeSocket:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
             pass
 
-        def __enter__(self):
+        def __enter__(self) -> "_FakeSocket":
             return self
 
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+        def __exit__(  # noqa: ARG002
+            self,
+            exc_type: Optional[Type[BaseException]],
+            exc: Optional[BaseException],
+            tb: Optional[TracebackType],
+        ) -> bool:
             return False
 
-        def bind(self, address):  # noqa: ARG002
+        def bind(self, address: Tuple[str, int]) -> None:  # noqa: ARG002
             raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(oauth_callback_server.socket, "socket", _FakeSocket)
@@ -172,20 +182,27 @@ def test_start_reuses_existing_workspace_callback_on_eaddrinuse(monkeypatch):
     assert server.is_running is True
 
 
-def test_start_rejects_eaddrinuse_when_callback_probe_does_not_match(monkeypatch):
+def test_start_rejects_eaddrinuse_when_callback_probe_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = oauth_callback_server.MinimalOAuthServer(8000, "http://localhost")
 
     class _FakeSocket:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
             pass
 
-        def __enter__(self):
+        def __enter__(self) -> "_FakeSocket":
             return self
 
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+        def __exit__(  # noqa: ARG002
+            self,
+            exc_type: Optional[Type[BaseException]],
+            exc: Optional[BaseException],
+            tb: Optional[TracebackType],
+        ) -> bool:
             return False
 
-        def bind(self, address):  # noqa: ARG002
+        def bind(self, address: Tuple[str, int]) -> None:  # noqa: ARG002
             raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(oauth_callback_server.socket, "socket", _FakeSocket)
