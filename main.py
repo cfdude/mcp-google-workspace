@@ -593,38 +593,40 @@ def main():
     if args.read_only:
         set_read_only(True)
 
-    safe_print(
-        f"🛠️  Loading {len(tools_to_import)} tool module{'s' if len(tools_to_import) != 1 else ''}:"
-    )
+    loaded = []
+    failed = []
     for tool in tools_to_import:
         try:
             tool_imports[tool]()
-            safe_print(
-                f"   {tool_icons.get(tool, '🔧')} {tool.title()} - Google {tool.title()} API integration"
-            )
+            loaded.append(tool)
         except ModuleNotFoundError as exc:
             logger.error("Failed to import tool '%s': %s", tool, exc, exc_info=True)
-            safe_print(f"   ⚠️ Failed to load {tool.title()} tool module ({exc}).")
+            failed.append((tool, exc))
+
+    tool_summary = " ".join(
+        f"{tool_icons.get(t, '🔧')} {t.title()}" for t in loaded
+    )
+    safe_print(f"🛠️  Loaded {len(loaded)} services: {tool_summary}")
+    for tool, exc in failed:
+        safe_print(f"   ⚠️ Failed: {tool.title()} ({exc})")
 
     if perms:
-        safe_print("🔒 Permission Levels:")
-        for svc, lvl in sorted(perms.items()):
-            safe_print(f"   {tool_icons.get(svc, '  ')} {svc}: {lvl}")
+        perm_summary = " | ".join(
+            f"{tool_icons.get(svc, ' ')}{svc}:{lvl}" for svc, lvl in sorted(perms.items())
+        )
+        safe_print(f"🔒 Permissions: {perm_summary}")
     safe_print("")
 
     # Filter tools based on tier configuration (if tier-based loading is enabled)
     filter_server_tools(server)
 
-    safe_print("📊 Configuration Summary:")
-    safe_print(f"   🔧 Services Loaded: {len(tools_to_import)}/{len(tool_imports)}")
+    summary_parts = [f"{len(loaded)}/{len(tool_imports)} services"]
     if args.tool_tier is not None:
+        tier_desc = f"tier={args.tool_tier}"
         if args.tools is not None:
-            safe_print(
-                f"   📊 Tool Tier: {args.tool_tier} (filtered to {', '.join(args.tools)})"
-            )
-        else:
-            safe_print(f"   📊 Tool Tier: {args.tool_tier}")
-    safe_print(f"   📝 Log Level: {logging.getLogger().getEffectiveLevel()}")
+            tier_desc += f" ({', '.join(args.tools)})"
+        summary_parts.append(tier_desc)
+    safe_print(f"📊 {' | '.join(summary_parts)}")
     safe_print("")
 
     # Set global single-user mode flag
