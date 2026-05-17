@@ -268,8 +268,9 @@ class MinimalOAuthServer:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind((hostname, self.port))
         except OSError as exc:
-            if exc.errno == errno.EADDRINUSE and self._callback_endpoint_looks_like_workspace(
-                hostname
+            if (
+                exc.errno == errno.EADDRINUSE
+                and self._callback_endpoint_looks_like_workspace(hostname)
             ):
                 logger.info(
                     "OAuth callback server already available on %s:%s; reusing existing listener",

@@ -121,6 +121,7 @@ def resolve_callback_port_for_transport(transport: str) -> None:
     else:
         os.environ.pop("WORKSPACE_MCP_RESOLVED_PORT", None)
 
+
 # Single source of truth: service name -> module path.
 # VALID_SERVICES is derived from this mapping.
 SERVICE_MODULES = {
