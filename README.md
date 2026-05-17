@@ -1452,17 +1452,26 @@ If you need to use HTTP mode with Claude Desktop:
 
 ### First-Time Authentication
 
-Legacy local authentication uses the Google OAuth consent flow:
+Legacy local authentication uses the Google OAuth consent flow. In `stdio` mode, the server tries to open the browser automatically so long Google OAuth URLs do not wrap in terminals or get corrupted during copy/paste, which improves reliability of the redirect flow.
 
 - In `stdio` mode, the server starts a local callback listener and tries to open the Google authorization page in your browser automatically.
 - If the browser cannot be opened, the tool response includes the authorization URL to open manually.
 - In `streamable-http` / OAuth 2.1 mode, use your MCP client's OAuth flow instead; the server does not try to open a browser on the host running the HTTP service.
+- When a legacy local auth tool call provides `user_google_email`, the server adds that value as `login_hint` on the Google authorization URL so Google can pre-select the account on the consent screen. This applies to the `stdio` flow whether the server opens the browser or returns the URL; `streamable-http` / OAuth 2.1 flows still rely on the MCP client's OAuth flow.
+
+Example:
+
+```text
+user_google_email="alex@example.com"
+Authorization URL: https://accounts.google.com/o/oauth2/v2/auth?...&login_hint=alex%40example.com
+```
 
 When calling a tool:
-1. Complete Google authorization in the opened browser page, or open the returned authorization URL manually.
-2. After successful authorization, the callback page displays the authenticated email address when needed.
-3. Retry the original tool call with that `user_google_email`.
-4. Server completes authentication using the stored Google credentials.
+1. If an opened browser page appears, complete Google authorization there.
+2. If no browser opens, open the returned authorization URL manually and complete Google authorization there.
+3. After successful authorization, the callback page displays the authenticated email address.
+4. Retry the original tool call with that email as `user_google_email`; the server needs this value to associate the stored Google credentials with the tool request, so the original request is not authorized until it is retried.
+5. Server completes authentication using the stored Google credentials.
 
 ---
 
