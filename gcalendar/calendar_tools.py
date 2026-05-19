@@ -296,6 +296,31 @@ def _format_attachment_details(
     return f"\n{indent}".join(attachment_details_list)
 
 
+def _format_person(person: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    Format a Google Calendar person dict (creator or organizer) for display.
+
+    Args:
+        person: Dict with optional ``displayName`` and ``email`` keys, or ``None``.
+
+    Returns:
+        ``"Name <email>"`` when both are present, ``"Name"`` or ``"<email>"`` when
+        only one is, or ``None`` when neither is — letting callers skip the line
+        entirely rather than printing an empty placeholder.
+    """
+    if not person:
+        return None
+    name = (person.get("displayName") or "").strip()
+    email = (person.get("email") or "").strip()
+    if name and email:
+        return f"{name} <{email}>"
+    if name:
+        return name
+    if email:
+        return f"<{email}>"
+    return None
+
+
 # Helper function to ensure time strings for API calls are correctly formatted
 def _correct_time_format_for_api(
     time_str: Optional[str], param_name: str, timezone: Optional[str] = None
@@ -566,6 +591,9 @@ async def get_events(
 
         meeting_link = _get_meeting_link(item)
 
+        creator_str = _format_person(item.get("creator"))
+        organizer_str = _format_person(item.get("organizer"))
+
         event_details = (
             f"Event Details:\n"
             f"- Title: {summary}\n"
@@ -575,6 +603,10 @@ async def get_events(
             f"- Location: {location}\n"
             f"- Color ID: {color_id}\n"
         )
+        if creator_str:
+            event_details += f"- Creator: {creator_str}\n"
+        if organizer_str:
+            event_details += f"- Organizer: {organizer_str}\n"
         if meeting_link:
             event_details += f"- Meeting Link: {meeting_link}\n"
         event_details += (
@@ -618,11 +650,18 @@ async def get_events(
 
             meeting_link = _get_meeting_link(item)
 
+            creator_str = _format_person(item.get("creator"))
+            organizer_str = _format_person(item.get("organizer"))
+
             event_detail_parts = (
                 f'- "{summary}" (Starts: {start_time}, Ends: {end_time})\n'
                 f"  Description: {description}\n"
                 f"  Location: {location}\n"
             )
+            if creator_str:
+                event_detail_parts += f"  Creator: {creator_str}\n"
+            if organizer_str:
+                event_detail_parts += f"  Organizer: {organizer_str}\n"
             if meeting_link:
                 event_detail_parts += f"  Meeting Link: {meeting_link}\n"
             event_detail_parts += (
