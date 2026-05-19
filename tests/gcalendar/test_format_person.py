@@ -1,6 +1,6 @@
 """Unit tests for the _format_person helper used by get_events detailed output."""
 
-from gcalendar.calendar_tools import _format_person
+from gcalendar.calendar_helpers import _format_person
 
 
 def test_format_person_name_and_email():
