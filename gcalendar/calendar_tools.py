@@ -1003,11 +1003,6 @@ async def _modify_event_impl(
                 event_body["conferenceData"] = {}
                 logger.info("[modify_event] Removing Google Meet conference")
         elif "conferenceData" in existing_event:
-            # #2319 — Do NOT copy conferenceData back into event_body.
-            # The full object contains read-only output fields (entryPoints,
-            # conferenceSolution, conferenceId) that the API rejects on
-            # update with HTTP 400.  Using .patch() below preserves
-            # unspecified fields automatically.
             logger.info("[modify_event] Existing conference data preserved via patch (not copied)")
 
     except HttpError as get_error:
