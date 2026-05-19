@@ -1,10 +1,5 @@
 """Unit tests for the _format_person helper used by get_events detailed output."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 from gcalendar.calendar_tools import _format_person
 
 
