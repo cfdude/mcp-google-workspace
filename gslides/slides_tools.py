@@ -62,7 +62,9 @@ def _iter_text_bearing_elements(
             yield from _iter_text_bearing_elements(children)
 
 
-def _describe_elements(elements: Optional[List[Dict[str, Any]]], indent: str = "  ") -> List[str]:
+def _describe_elements(
+    elements: Optional[List[Dict[str, Any]]], indent: str = "  "
+) -> List[str]:
     """Build descriptive lines for page elements, including text content for shapes.
 
     Recurses into elementGroup.children with deeper indentation so grouped shapes
