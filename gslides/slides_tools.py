@@ -62,7 +62,7 @@ def _iter_text_bearing_elements(
             yield from _iter_text_bearing_elements(children)
 
 
-def _describe_elements(elements: List[Dict[str, Any]], indent: str = "  ") -> List[str]:
+def _describe_elements(elements: Optional[List[Dict[str, Any]]], indent: str = "  ") -> List[str]:
     """Build descriptive lines for page elements, including text content for shapes.
 
     Recurses into elementGroup.children with deeper indentation so grouped shapes
@@ -70,7 +70,7 @@ def _describe_elements(elements: List[Dict[str, Any]], indent: str = "  ") -> Li
     blockquote-style lines preserving paragraph structure.
     """
     info: List[str] = []
-    for element in elements:
+    for element in elements or []:
         element_id = element.get("objectId", "Unknown")
         if "shape" in element:
             shape_type = element["shape"].get("shapeType", "Unknown")

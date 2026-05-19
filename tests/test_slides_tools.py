@@ -387,3 +387,8 @@ def test_describe_elements_keeps_shape_without_text_simple():
     assert _describe_elements(elements) == [
         "  Shape: ID s1, Type: RECTANGLE",
     ]
+
+
+def test_describe_elements_handles_empty_and_none_input():
+    assert _describe_elements([]) == []
+    assert _describe_elements(None) == []
