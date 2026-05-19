@@ -1003,9 +1003,12 @@ async def _modify_event_impl(
                 event_body["conferenceData"] = {}
                 logger.info("[modify_event] Removing Google Meet conference")
         elif "conferenceData" in existing_event:
-            # Preserve existing conference data if not specified
-            event_body["conferenceData"] = existing_event["conferenceData"]
-            logger.info("[modify_event] Preserving existing conference data")
+            # #2319 — Do NOT copy conferenceData back into event_body.
+            # The full object contains read-only output fields (entryPoints,
+            # conferenceSolution, conferenceId) that the API rejects on
+            # update with HTTP 400.  Using .patch() below preserves
+            # unspecified fields automatically.
+            logger.info("[modify_event] Existing conference data preserved via patch (not copied)")
 
     except HttpError as get_error:
         if get_error.resp.status == 404:
@@ -1019,11 +1022,16 @@ async def _modify_event_impl(
                 f"[modify_event] Error during pre-update verification, but proceeding with update: {get_error}"
             )
 
-    # Proceed with the update
+    # Proceed with the update.  Use .patch() instead of .update() so
+    # unspecified fields (including conferenceData when not being modified)
+    # are preserved automatically.  .update() is a full PUT that strips
+    # any field not in the body — .patch() only touches what we send.
+    # (#2319: .update() + preserved conferenceData caused HTTP 400 because
+    # the copied object contained read-only output fields.)
     updated_event = await asyncio.to_thread(
         lambda: (
             service.events()
-            .update(
+            .patch(
                 calendarId=calendar_id,
                 eventId=event_id,
                 body=event_body,
