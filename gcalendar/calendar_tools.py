@@ -213,7 +213,6 @@ def _preserve_existing_fields(
             event_body[field_name] = new_value
 
 
-
 # Helper function to ensure time strings for API calls are correctly formatted
 def _correct_time_format_for_api(
     time_str: Optional[str], param_name: str, timezone: Optional[str] = None
