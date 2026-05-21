@@ -246,7 +246,7 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 | **🖥️ Server** | | |
 | `WORKSPACE_MCP_BASE_URI` | | Base server URI (no port) — default `http://localhost` |
 | `WORKSPACE_MCP_PORT` | | Listening port — default `8000`. Also controls the stdio-mode OAuth callback port. The `PORT` env var takes precedence if set. |
-| `WORKSPACE_MCP_HOST` | | Bind host (set via this environment variable or the `--host` CLI flag) — default `0.0.0.0` for OAuth 2.1 HTTP, `127.0.0.1` for legacy streamable HTTP. |
+| `WORKSPACE_MCP_HOST` | | Bind host — default `0.0.0.0` for OAuth 2.1 HTTP, `127.0.0.1` for legacy streamable HTTP. |
 | `WORKSPACE_MCP_TRANSPORT` | | `stdio` or `streamable-http`; used when `--transport` is not passed |
 | `WORKSPACE_MCP_HTTP_PORT` | | Advanced legacy-stdio sidecar `/mcp` port for local `workspace-cli` access. Disabled when empty. Binds to `127.0.0.1` only and is accessible to local processes. |
 | `WORKSPACE_EXTERNAL_URL` | | External URL for reverse proxy setups |
