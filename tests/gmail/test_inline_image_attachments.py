@@ -309,9 +309,7 @@ def test_plaintext_body_with_content_id_fallback():
     assert len(image_parts) == 1, f"expected 1 image part, got {len(image_parts)}"
     img = image_parts[0]
     cid_header = img.get("Content-ID", "")
-    assert cid_header.strip("<>") == "chart", (
-        f"Content-ID mismatch: got {cid_header!r}"
-    )
+    assert cid_header.strip("<>") == "chart", f"Content-ID mismatch: got {cid_header!r}"
     disposition = img.get("Content-Disposition", "")
     assert disposition.startswith("inline"), (
         f"expected inline disposition, got {disposition!r}"
@@ -324,12 +322,7 @@ def test_duplicate_content_id_logs_warning(caplog):
     with caplog.at_level(logging.WARNING, logger="gmail.gmail_tools"):
         raw_b64, _, attached, errors = _prepare_gmail_message(
             subject="dup-cid-test",
-            body=(
-                "<html><body>"
-                '<img src="cid:same">'
-                '<img src="cid:same">'
-                "</body></html>"
-            ),
+            body=('<html><body><img src="cid:same"><img src="cid:same"></body></html>'),
             body_format="html",
             to="someone@example.com",
             attachments=[
@@ -352,7 +345,9 @@ def test_duplicate_content_id_logs_warning(caplog):
     assert attached == 2
 
     # Verify the duplicate warning was logged.
-    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    warning_messages = [
+        r.message for r in caplog.records if r.levelno == logging.WARNING
+    ]
     assert any("Duplicate content_id" in m for m in warning_messages), (
         f"expected duplicate content_id warning, got: {warning_messages}"
     )
