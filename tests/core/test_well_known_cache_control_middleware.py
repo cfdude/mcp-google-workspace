@@ -108,6 +108,44 @@ def test_origin_validation_allows_configured_external_origin(monkeypatch):
     assert response.status_code == 200
 
 
+def test_origin_validation_vscode_webview_scoping(monkeypatch):
+    from core.server import OriginValidationMiddleware
+
+    monkeypatch.setattr(
+        "auth.oauth_config.get_oauth_config",
+        lambda: SimpleNamespace(
+            get_allowed_origins=lambda: [
+                "vscode-webview://publisher.extension/somepath"
+            ],
+            external_url=None,
+        ),
+    )
+
+    async def endpoint(request):
+        return Response("ok")
+
+    app = Starlette(
+        routes=[Route("/health", endpoint)],
+        middleware=[Middleware(OriginValidationMiddleware)],
+    )
+    client = TestClient(app)
+
+    # Matching extension origin is accepted
+    assert (
+        client.get(
+            "/health", headers={"Origin": "vscode-webview://publisher.extension"}
+        ).status_code
+        == 200
+    )
+    # Different extension origin is rejected
+    assert (
+        client.get(
+            "/health", headers={"Origin": "vscode-webview://other.publisher"}
+        ).status_code
+        == 403
+    )
+
+
 def test_configured_server_applies_no_cache_to_served_oauth_discovery_routes(
     monkeypatch,
 ):

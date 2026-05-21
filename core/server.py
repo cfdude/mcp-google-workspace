@@ -53,7 +53,7 @@ def _normalize_origin(origin: str) -> Optional[str]:
     if not parsed.scheme:
         return None
     if parsed.scheme == "vscode-webview":
-        return "vscode-webview://"
+        return f"vscode-webview://{parsed.netloc}" if parsed.netloc else None
     if not parsed.netloc:
         return None
     return f"{parsed.scheme}://{parsed.netloc}"
