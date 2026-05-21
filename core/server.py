@@ -37,7 +37,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.types import Scope, Receive, Send
+from starlette.types import ASGIApp, Scope, Receive, Send
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -83,10 +83,10 @@ def _get_allowed_http_origins() -> set[str]:
 class OriginValidationMiddleware:
     """Reject browser-originated HTTP requests from untrusted origins."""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
             raw_origin = headers.get(b"origin")
