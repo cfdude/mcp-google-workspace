@@ -94,9 +94,8 @@ class OriginValidationMiddleware:
                 origin = raw_origin.decode("latin-1")
                 normalized = _normalize_origin(origin)
                 allowed = _get_allowed_http_origins()
-                if (
-                    not normalized
-                    or (normalized not in allowed and not _is_loopback_origin(origin))
+                if not normalized or (
+                    normalized not in allowed and not _is_loopback_origin(origin)
                 ):
                     logger.warning("Rejected HTTP request from Origin: %s", origin)
                     response = JSONResponse(
