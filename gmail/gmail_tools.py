@@ -76,7 +76,7 @@ LOW_VALUE_TEXT_FOOTER_MARKERS = (
     "manage preferences",
 )
 LOW_VALUE_TEXT_HTML_DIFF_MIN = 80
-CONTENT_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+\-@]*$")
+CONTENT_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-@]*$")
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -581,7 +581,7 @@ def _normalize_attachment_content_id(content_id: Any) -> str:
     if not CONTENT_ID_SAFE_RE.fullmatch(cid_value):
         raise ValueError(
             "content_id contains invalid characters; use letters, digits, "
-            "'.', '_', '%', '+', '-', or '@'"
+            "'.', '_', '+', '-', or '@'"
         )
     return cid_value
 
@@ -975,14 +975,14 @@ async def _resolve_url_attachments(
             continue
         if local is not None:
             data, local_filename, local_mime = local
-            resolved.append(
-                {
-                    "_resolved_bytes": data,
-                    "filename": filename or local_filename,
-                    "mime_type": mime_type or local_mime,
-                    "content_id": att.get("content_id"),
-                }
-            )
+            entry = {
+                "_resolved_bytes": data,
+                "filename": filename or local_filename,
+                "mime_type": mime_type or local_mime,
+            }
+            if "content_id" in att:
+                entry["content_id"] = att["content_id"]
+            resolved.append(entry)
             continue
 
         # External URL — SSRF-safe fetch.
@@ -1009,14 +1009,14 @@ async def _resolve_url_attachments(
             elif filename:
                 mime_type, _ = mimetypes.guess_type(filename)
 
-        resolved.append(
-            {
-                "_resolved_bytes": data,
-                "filename": filename,
-                "mime_type": mime_type,
-                "content_id": att.get("content_id"),
-            }
-        )
+        entry = {
+            "_resolved_bytes": data,
+            "filename": filename,
+            "mime_type": mime_type,
+        }
+        if "content_id" in att:
+            entry["content_id"] = att["content_id"]
+        resolved.append(entry)
 
     return resolved
 
@@ -1107,6 +1107,8 @@ def _prepare_gmail_message(
     else:
         message.set_content(body)
 
+    seen_content_ids: set[str] = set()
+
     for attachment in attachments or []:
         if attachment.get("error"):
             attachment_errors.append(_format_resolved_attachment_error(attachment))
@@ -1169,6 +1171,14 @@ def _prepare_gmail_message(
             )
             if content_id:
                 cid_value = _normalize_attachment_content_id(content_id)
+                if cid_value in seen_content_ids:
+                    logger.warning(
+                        "Duplicate content_id %r on attachment %s; "
+                        "email clients may only render one instance",
+                        cid_value,
+                        filename or file_path,
+                    )
+                seen_content_ids.add(cid_value)
                 # Find the right MIME part to attach the inline image to.
                 # First inline image: target text/html (creates multipart/related).
                 # Subsequent inline images: target the existing multipart/related

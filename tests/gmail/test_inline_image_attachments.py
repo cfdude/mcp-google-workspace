@@ -6,9 +6,9 @@ must use multipart/related so the HTML body can reference the image via
 """
 
 import base64
+import logging
 from email import message_from_bytes
 from email.policy import SMTP
-
 
 from gmail.gmail_tools import _prepare_gmail_message
 
@@ -278,3 +278,81 @@ def test_mixed_inline_and_legacy_attachments():
     assert len(image_parts) == 2
     cids = {(p.get("Content-ID") or "").strip("<>") for p in image_parts}
     assert cids == {"hero", ""}, f"expected one cid 'hero' and one empty, got {cids}"
+
+
+def test_plaintext_body_with_content_id_fallback():
+    """When body_format is 'text' (no text/html part), the inline image
+    must still attach via the plain-text message fallback target."""
+    raw_b64, _, attached, errors = _prepare_gmail_message(
+        subject="plaintext-inline-test",
+        body="See the attached image.",
+        body_format="text",
+        to="someone@example.com",
+        attachments=[
+            {
+                "content": _TINY_PNG_B64,
+                "filename": "chart.png",
+                "mime_type": "image/png",
+                "content_id": "chart",
+            }
+        ],
+    )
+
+    assert errors == []
+    assert attached == 1
+
+    msg = _decode_raw(raw_b64)
+    parts = list(_walk_parts(msg))
+
+    # Image part exists with correct Content-ID and inline disposition.
+    image_parts = [p for p in parts if p.get_content_type() == "image/png"]
+    assert len(image_parts) == 1, f"expected 1 image part, got {len(image_parts)}"
+    img = image_parts[0]
+    cid_header = img.get("Content-ID", "")
+    assert cid_header.strip("<>") == "chart", (
+        f"Content-ID mismatch: got {cid_header!r}"
+    )
+    disposition = img.get("Content-Disposition", "")
+    assert disposition.startswith("inline"), (
+        f"expected inline disposition, got {disposition!r}"
+    )
+
+
+def test_duplicate_content_id_logs_warning(caplog):
+    """Two attachments with the same content_id should both attach but
+    produce a warning about the duplicate."""
+    with caplog.at_level(logging.WARNING, logger="gmail.gmail_tools"):
+        raw_b64, _, attached, errors = _prepare_gmail_message(
+            subject="dup-cid-test",
+            body=(
+                "<html><body>"
+                '<img src="cid:same">'
+                '<img src="cid:same">'
+                "</body></html>"
+            ),
+            body_format="html",
+            to="someone@example.com",
+            attachments=[
+                {
+                    "content": _TINY_PNG_B64,
+                    "filename": "a.png",
+                    "mime_type": "image/png",
+                    "content_id": "same",
+                },
+                {
+                    "content": _TINY_PNG_B64,
+                    "filename": "b.png",
+                    "mime_type": "image/png",
+                    "content_id": "same",
+                },
+            ],
+        )
+
+    assert errors == []
+    assert attached == 2
+
+    # Verify the duplicate warning was logged.
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("Duplicate content_id" in m for m in warning_messages), (
+        f"expected duplicate content_id warning, got: {warning_messages}"
+    )
