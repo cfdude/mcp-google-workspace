@@ -6,11 +6,14 @@ must use multipart/related so the HTML body can reference the image via
 """
 
 import base64
+import asyncio
 import logging
 from email import message_from_bytes
 from email.policy import SMTP
+from types import SimpleNamespace
 
-from gmail.gmail_tools import _prepare_gmail_message
+import gmail.gmail_tools as gmail_tools
+from gmail.gmail_tools import _prepare_gmail_message, _resolve_url_attachments
 
 
 # Minimal 1x1 PNG (89 bytes). Used as fake image payload.
@@ -83,21 +86,37 @@ def test_content_id_attachment_uses_multipart_related():
     )
 
 
-def test_url_based_inline_attachment_preserves_content_id():
+def test_url_based_inline_attachment_preserves_content_id(monkeypatch):
     """A URL-resolved attachment must keep content_id so it remains inline."""
+    async def fake_download_attachment_bytes(url):
+        assert url == "https://example.com/hero.png"
+        return (
+            base64.b64decode(_TINY_PNG_B64),
+            SimpleNamespace(headers={"content-type": "image/png"}),
+        )
+
+    monkeypatch.setattr(
+        gmail_tools, "_download_attachment_bytes", fake_download_attachment_bytes
+    )
+    attachments = asyncio.run(
+        _resolve_url_attachments(
+            [
+                {
+                    "url": "https://example.com/hero.png",
+                    "filename": "hero.png",
+                    "mime_type": "image/png",
+                    "content_id": "hero",
+                }
+            ]
+        )
+    )
+
     raw_b64, _, attached, errors = _prepare_gmail_message(
         subject="url-inline-img-test",
         body=('<html><body><img src="cid:hero"></body></html>'),
         body_format="html",
         to="someone@example.com",
-        attachments=[
-            {
-                "_resolved_bytes": base64.b64decode(_TINY_PNG_B64),
-                "filename": "hero.png",
-                "mime_type": "image/png",
-                "content_id": "hero",
-            }
-        ],
+        attachments=attachments,
     )
 
     assert errors == []
@@ -281,12 +300,12 @@ def test_mixed_inline_and_legacy_attachments():
 
 
 def test_plaintext_body_with_content_id_fallback():
-    """When body_format is 'text' (no text/html part), the inline image
+    """When body_format is 'plain' (no text/html part), the inline image
     must still attach via the plain-text message fallback target."""
     raw_b64, _, attached, errors = _prepare_gmail_message(
         subject="plaintext-inline-test",
         body="See the attached image.",
-        body_format="text",
+        body_format="plain",
         to="someone@example.com",
         attachments=[
             {
