@@ -1066,7 +1066,9 @@ async def _modify_event_impl(
                 event_body["conferenceData"] = {}
                 logger.info("[modify_event] Removing Google Meet conference")
         elif "conferenceData" in existing_event:
-            logger.info("[modify_event] Existing conference data preserved via patch (not copied)")
+            logger.info(
+                "[modify_event] Existing conference data preserved via patch (not copied)"
+            )
 
     except HttpError as get_error:
         if get_error.resp.status == 404:
