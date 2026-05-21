@@ -183,6 +183,8 @@ def build_drive_list_params(
     corpora: Optional[str] = None,
     page_token: Optional[str] = None,
     detailed: bool = True,
+    include_permissions: bool = False,
+    order_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Helper function to build common list parameters for Drive API calls.
@@ -196,12 +198,26 @@ def build_drive_list_params(
         page_token: Optional page token for pagination (from a previous nextPageToken)
         detailed: Whether to request size, modifiedTime, and webViewLink fields.
                   Defaults to True to preserve existing behavior.
+        include_permissions: Whether detailed results should include file ACL fields.
+        order_by: Optional sort order. Comma-separated list of sort keys.
+                  Valid keys: 'createdTime', 'folder', 'modifiedByMeTime', 'modifiedTime',
+                  'name', 'name_natural', 'quotaBytesUsed', 'recency', 'sharedWithMeTime',
+                  'starred', 'viewedByMeTime'. Add 'desc' modifier to reverse (e.g., 'modifiedTime desc').
+                  Example: 'folder,modifiedTime desc,name'
 
     Returns:
         Dictionary of parameters for Drive API list calls
     """
     if detailed:
-        fields = "nextPageToken, files(id, name, mimeType, webViewLink, iconLink, modifiedTime, size)"
+        permission_fields = (
+            ", permissions(id, type, role)" if include_permissions else ""
+        )
+        fields = (
+            "nextPageToken, files(id, name, mimeType, webViewLink, iconLink,"
+            " modifiedTime, createdTime, size, driveId,"
+            " lastModifyingUser(displayName, emailAddress)"
+            f"{permission_fields})"
+        )
     else:
         fields = "nextPageToken, files(id, name, mimeType)"
     list_params = {
@@ -214,6 +230,11 @@ def build_drive_list_params(
 
     if page_token:
         list_params["pageToken"] = page_token
+
+    if order_by is not None:
+        normalized_order_by = order_by.strip()
+        if normalized_order_by:
+            list_params["orderBy"] = normalized_order_by
 
     if drive_id:
         list_params["driveId"] = drive_id
