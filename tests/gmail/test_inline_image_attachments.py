@@ -88,6 +88,7 @@ def test_content_id_attachment_uses_multipart_related():
 
 def test_url_based_inline_attachment_preserves_content_id(monkeypatch):
     """A URL-resolved attachment must keep content_id so it remains inline."""
+
     async def fake_download_attachment_bytes(url):
         assert url == "https://example.com/hero.png"
         return (
