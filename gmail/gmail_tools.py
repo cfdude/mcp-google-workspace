@@ -76,6 +76,7 @@ LOW_VALUE_TEXT_FOOTER_MARKERS = (
     "manage preferences",
 )
 LOW_VALUE_TEXT_HTML_DIFF_MIN = 80
+CONTENT_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+\-@]*$")
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -568,6 +569,23 @@ def _format_attachment_error(
     return f"{label}: {detail}"
 
 
+def _normalize_attachment_content_id(content_id: Any) -> str:
+    """Return a header-safe Content-ID value without surrounding brackets."""
+    raw = str(content_id)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        raise ValueError("content_id contains invalid control characters")
+
+    cid_value = raw.strip().strip("<>").strip()
+    if not cid_value:
+        raise ValueError("content_id must not be empty")
+    if not CONTENT_ID_SAFE_RE.fullmatch(cid_value):
+        raise ValueError(
+            "content_id contains invalid characters; use letters, digits, "
+            "'.', '_', '%', '+', '-', or '@'"
+        )
+    return cid_value
+
+
 def _format_base64_content_block(urlsafe_b64_data: str) -> List[str]:
     """
     Convert Gmail's URL-safe base64 attachment data to standard base64 and
@@ -962,6 +980,7 @@ async def _resolve_url_attachments(
                     "_resolved_bytes": data,
                     "filename": filename or local_filename,
                     "mime_type": mime_type or local_mime,
+                    "content_id": att.get("content_id"),
                 }
             )
             continue
@@ -995,6 +1014,7 @@ async def _resolve_url_attachments(
                 "_resolved_bytes": data,
                 "filename": filename,
                 "mime_type": mime_type,
+                "content_id": att.get("content_id"),
             }
         )
 
@@ -1148,7 +1168,7 @@ def _prepare_gmail_message(
                 else ("application", "octet-stream")
             )
             if content_id:
-                cid_value = str(content_id).strip("<>").strip()
+                cid_value = _normalize_attachment_content_id(content_id)
                 # Find the right MIME part to attach the inline image to.
                 # First inline image: target text/html (creates multipart/related).
                 # Subsequent inline images: target the existing multipart/related
@@ -1186,9 +1206,7 @@ def _prepare_gmail_message(
                     subtype=sub_type,
                     filename=safe_filename,
                 )
-                logger.info(
-                    f"Attached file: {safe_filename} ({len(file_data)} bytes)"
-                )
+                logger.info(f"Attached file: {safe_filename} ({len(file_data)} bytes)")
             attached_count += 1
         except (binascii.Error, ValueError) as e:
             logger.error(f"Failed to decode attachment {filename or file_path}: {e}")

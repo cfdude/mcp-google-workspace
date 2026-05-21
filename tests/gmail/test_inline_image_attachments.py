@@ -4,11 +4,11 @@ When an attachment dict carries a `content_id` key, the resulting email
 must use multipart/related so the HTML body can reference the image via
 `cid:` URLs (RFC 2392).
 """
+
 import base64
 from email import message_from_bytes
 from email.policy import SMTP
 
-import pytest
 
 from gmail.gmail_tools import _prepare_gmail_message
 
@@ -39,12 +39,7 @@ def test_content_id_attachment_uses_multipart_related():
     the image carrying Content-ID header and inline disposition."""
     raw_b64, _, attached, errors = _prepare_gmail_message(
         subject="inline-img-test",
-        body=(
-            "<html><body>"
-            "<p>see image:</p>"
-            '<img src="cid:fig-001">'
-            "</body></html>"
-        ),
+        body=('<html><body><p>see image:</p><img src="cid:fig-001"></body></html>'),
         body_format="html",
         to="someone@example.com",
         attachments=[
@@ -86,6 +81,63 @@ def test_content_id_attachment_uses_multipart_related():
     assert disposition.startswith("inline"), (
         f"expected inline disposition, got {disposition!r}"
     )
+
+
+def test_url_based_inline_attachment_preserves_content_id():
+    """A URL-resolved attachment must keep content_id so it remains inline."""
+    raw_b64, _, attached, errors = _prepare_gmail_message(
+        subject="url-inline-img-test",
+        body=('<html><body><img src="cid:hero"></body></html>'),
+        body_format="html",
+        to="someone@example.com",
+        attachments=[
+            {
+                "_resolved_bytes": base64.b64decode(_TINY_PNG_B64),
+                "filename": "hero.png",
+                "mime_type": "image/png",
+                "content_id": "hero",
+            }
+        ],
+    )
+
+    assert errors == []
+    assert attached == 1
+
+    msg = _decode_raw(raw_b64)
+    parts = list(_walk_parts(msg))
+    content_types = [p.get_content_type() for p in parts]
+    assert "multipart/related" in content_types
+
+    image_parts = [p for p in parts if p.get_content_type() == "image/png"]
+    assert len(image_parts) == 1
+    cid_header = image_parts[0].get("Content-ID", "")
+    assert cid_header.strip("<>") == "hero"
+
+
+def test_content_id_rejects_control_characters():
+    """Unsafe content_id values must not reach MIME headers."""
+    raw_b64, _, attached, errors = _prepare_gmail_message(
+        subject="unsafe-cid-test",
+        body='<html><body><img src="cid:hero"></body></html>',
+        body_format="html",
+        to="someone@example.com",
+        attachments=[
+            {
+                "content": _TINY_PNG_B64,
+                "filename": "hero.png",
+                "mime_type": "image/png",
+                "content_id": "hero\r\nX-Injected: bad",
+            }
+        ],
+    )
+
+    assert attached == 0
+    assert len(errors) == 1
+    assert "content_id contains invalid control characters" in errors[0]
+
+    msg = _decode_raw(raw_b64)
+    parts = list(_walk_parts(msg))
+    assert [p for p in parts if p.get_content_type() == "image/png"] == []
 
 
 def test_multiple_inline_images_share_one_multipart_related():
@@ -191,12 +243,7 @@ def test_mixed_inline_and_legacy_attachments():
     multipart/related, regular attachment in multipart/mixed."""
     raw_b64, _, attached, errors = _prepare_gmail_message(
         subject="mixed-test",
-        body=(
-            "<html><body>"
-            '<img src="cid:hero">'
-            "<p>and a doc:</p>"
-            "</body></html>"
-        ),
+        body=('<html><body><img src="cid:hero"><p>and a doc:</p></body></html>'),
         body_format="html",
         to="someone@example.com",
         attachments=[
