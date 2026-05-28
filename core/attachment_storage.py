@@ -9,6 +9,7 @@ import base64
 import logging
 import os
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import NamedTuple, Optional, Dict
@@ -46,6 +47,16 @@ def sanitize_attachment_filename(filename: Optional[str]) -> str:
     """Return a filesystem-safe attachment filename."""
     if not filename:
         return "attachment"
+
+    # Normalize Unicode space separators (category "Zs") to a plain ASCII space.
+    # macOS, for example, names screenshots with a NARROW NO-BREAK SPACE (U+202F)
+    # before "AM"/"PM" (e.g. "Screenshot 2026-05-28 at 3.44.08 PM.png"). MCP
+    # clients commonly normalize such characters to a regular space when they echo
+    # the returned file path back into a read/open call, which then no longer
+    # matches the name on disk. Saving with a normalized name keeps them in sync.
+    filename = "".join(
+        " " if unicodedata.category(ch) == "Zs" else ch for ch in filename
+    )
 
     sanitized = _WINDOWS_RESERVED_FILENAME_CHARS.sub("_", filename).rstrip(" .")
     if not sanitized:
