@@ -1214,6 +1214,19 @@ GOOGLE_DOCS_MIME_TYPE = "application/vnd.google-apps.document"
 GOOGLE_SLIDES_MIME_TYPE = "application/vnd.google-apps.presentation"
 GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
 
+# Source MIME types that are safe to build from an in-memory `content` string.
+# Binary Office/OpenDocument formats (pptx/ppt/odp/xlsx/xls/ods/docx/odt) must
+# come from `file_path` / `file_url`; UTF-8 encoding their bytes from a string
+# would upload garbage under an Office MIME type and corrupt the conversion.
+TEXT_BASED_IMPORT_MIME_TYPES = {
+    "text/plain",
+    "text/markdown",
+    "text/html",
+    "text/csv",
+    "text/tab-separated-values",
+    "application/rtf",
+}
+
 
 def _detect_source_format(
     file_name: str,
@@ -1321,6 +1334,12 @@ async def _import_with_conversion(
 
     # Handle content (string input for text formats)
     if content is not None:
+        if source_mime_type not in TEXT_BASED_IMPORT_MIME_TYPES:
+            raise ValueError(
+                f"[{tool_name}] 'content' is only valid for text-based source formats, "
+                f"but the source resolves to '{source_mime_type}' (a binary format). "
+                f"Provide a 'file_path' or 'file_url' for binary formats instead."
+            )
         file_data = content.encode("utf-8")
         logger.info(f"[{tool_name}] Using content: {len(file_data)} bytes")
 
@@ -1366,26 +1385,38 @@ async def _import_with_conversion(
         # SSRF protection: block internal/private network URLs and validate redirects
         remote_file_data, remote_content_type = await _download_url_to_bytes(file_url)
 
+        # Prefer the Content-Type from the download; fall back to URL-based detection
+        if not source_format:
+            ct_base = (remote_content_type or "").split(";", 1)[0].strip()
+            if ct_base and ct_base != "application/octet-stream":
+                source_mime_type = ct_base
+                logger.info(
+                    f"[{tool_name}] Using Content-Type from response: {source_mime_type}"
+                )
+            else:
+                source_mime_type = _detect_source_format(file_url, None, format_map)
+                logger.info(f"[{tool_name}] Detected from URL path: {source_mime_type}")
+
+    # Enforce the per-tool destination allowlist on the FINAL resolved source MIME
+    # type — after explicit source_format, initial auto-detect, file_path re-detect,
+    # and the file_url Content-Type. Auto-detection (or a remote Content-Type) can
+    # land on a MIME outside this tool's format_map (e.g. text/plain from an unknown
+    # extension, or a .docx handed to Slides); fail fast rather than upload it.
+    if source_mime_type not in format_map.values():
+        if remote_file_data is not None:
+            remote_file_data.close()
+        raise ValueError(
+            f"[{tool_name}] Detected source MIME type '{source_mime_type}' is not "
+            f"supported by this tool. Supported source formats: "
+            f"{', '.join(ext.lstrip('.') for ext in sorted(format_map.keys()))}."
+        )
+
     # Upload with conversion
     if remote_file_data is not None:
         with remote_file_data:
             remote_size = await _get_file_size(remote_file_data)
 
             logger.info(f"[{tool_name}] Downloaded from URL: {remote_size} bytes")
-
-            # Prefer the Content-Type from the download; fall back to URL-based detection
-            if not source_format:
-                ct_base = (remote_content_type or "").split(";", 1)[0].strip()
-                if ct_base and ct_base != "application/octet-stream":
-                    source_mime_type = ct_base
-                    logger.info(
-                        f"[{tool_name}] Using Content-Type from response: {source_mime_type}"
-                    )
-                else:
-                    source_mime_type = _detect_source_format(file_url, None, format_map)
-                    logger.info(
-                        f"[{tool_name}] Detected from URL path: {source_mime_type}"
-                    )
 
             media = MediaIoBaseUpload(
                 remote_file_data,

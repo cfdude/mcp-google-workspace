@@ -1674,9 +1674,9 @@ async def test_import_to_google_sheets_uses_google_api_retries(mock_resolve_fold
     await _unwrap(import_to_google_sheets)(
         service=mock_service,
         user_google_email="user@example.com",
-        file_name="Budget.xlsx",
-        content="ignored",
-        source_format="xlsx",
+        file_name="Budget.csv",
+        content="a,b\n1,2",
+        source_format="csv",
         folder_id="root",
     )
 
@@ -1684,3 +1684,110 @@ async def test_import_to_google_sheets_uses_google_api_retries(mock_resolve_fold
         mock_service.files.return_value.create.return_value.execute.call_args.kwargs
     )
     assert execute_kwargs["num_retries"] == 3
+
+
+# ---------------------------------------------------------------------------
+# import conversion — robustness guards (CodeRabbit PR #822)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_rejects_content_for_binary_format(mock_resolve_folder):
+    """content with a binary source (xlsx) is rejected before any upload.
+
+    import_to_google_slides exposes no `content` parameter, so the binary-content
+    guard is exercised through import_to_google_sheets, whose format_map includes
+    binary spreadsheet formats (xlsx/xls/ods) alongside text-based csv/tsv.
+    """
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    with pytest.raises(ValueError, match="text-based source formats"):
+        await _unwrap(import_to_google_sheets)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            file_name="Budget.xlsx",
+            content="not real binary",
+            source_format="xlsx",
+        )
+    # Never attempted an upload.
+    mock_service.files.return_value.create.return_value.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+@patch("gdrive.drive_tools.validate_file_path")
+async def test_import_to_google_slides_rejects_unsupported_source_via_allowlist(
+    mock_validate_path, mock_resolve_folder
+):
+    """A .docx handed to Slides is rejected by the per-tool source allowlist."""
+    mock_resolve_folder.return_value = "resolved_root"
+
+    fake_path = Mock()
+    fake_path.exists.return_value = True
+    fake_path.is_file.return_value = True
+    fake_path.read_bytes.return_value = b"PK\x03\x04 docx bytes"
+    mock_validate_path.return_value = fake_path
+
+    mock_service = Mock()
+    with pytest.raises(ValueError, match="not supported by this tool"):
+        await _unwrap(import_to_google_slides)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            file_name="Deck",
+            file_path="x.docx",
+        )
+    mock_service.files.return_value.create.return_value.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_sheets_accepts_csv_content(mock_resolve_folder):
+    """csv is text-based AND in the Sheets allowlist: content still succeeds."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "sheet123",
+        "name": "Data",
+        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+    }
+
+    result = await _unwrap(import_to_google_sheets)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="Data.csv",
+        content="a,b\n1,2",
+        source_format="csv",
+        folder_id="root",
+    )
+
+    media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
+    assert media.mimetype() == "text/csv"
+    assert "Successfully imported" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_doc_accepts_markdown_content(mock_resolve_folder):
+    """Backward-compat: markdown content into Docs still succeeds."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "doc123",
+        "name": "My Doc",
+        "webViewLink": "https://docs.google.com/document/d/doc123",
+        "mimeType": "application/vnd.google-apps.document",
+    }
+
+    result = await _unwrap(import_to_google_doc)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="My Doc.md",
+        content="# Title",
+        folder_id="root",
+    )
+
+    media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
+    assert media.mimetype() == "text/markdown"
+    assert "Successfully imported" in result
