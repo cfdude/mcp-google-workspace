@@ -8,6 +8,7 @@ and `file_type` filtering behaviors.
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
+import io
 import sys
 import os
 
@@ -17,6 +18,8 @@ from gdrive.drive_helpers import build_drive_list_params
 from gdrive.drive_tools import (
     get_drive_file_permissions,
     import_to_google_doc,
+    import_to_google_sheets,
+    import_to_google_slides,
     list_drive_items,
     search_drive_files,
 )
@@ -1567,3 +1570,117 @@ def test_resolve_file_type_mime_empty_raises():
 
     with pytest.raises(ValueError, match="cannot be empty"):
         resolve_file_type_mime("   ")
+
+
+# ---------------------------------------------------------------------------
+# import_to_google_slides / import_to_google_sheets — Office -> Google conversion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools._download_url_to_bytes", new_callable=AsyncMock)
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_slides_converts_pptx(
+    mock_resolve_folder, mock_download
+):
+    """A .pptx source uploads PPTX media while the body targets Slides."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_download.return_value = (io.BytesIO(b"PPTX-BYTES"), None)
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "deck123",
+        "name": "Deck",
+        "webViewLink": "https://docs.google.com/presentation/d/deck123",
+        "mimeType": "application/vnd.google-apps.presentation",
+    }
+
+    result = await _unwrap(import_to_google_slides)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="Deck.pptx",
+        file_url="https://example.com/deck.pptx",
+        source_format="pptx",
+        folder_id="root",
+    )
+
+    body = mock_service.files.return_value.create.call_args.kwargs["body"]
+    assert body["mimeType"] == "application/vnd.google-apps.presentation"
+    media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
+    assert (
+        media.mimetype()
+        == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+    assert "Successfully imported" in result
+    assert "Presentation ID" in result
+
+
+@pytest.mark.asyncio
+async def test_import_to_google_slides_rejects_unsupported_format():
+    """A spreadsheet source_format is rejected by the Slides tool."""
+    mock_service = Mock()
+    with pytest.raises(ValueError, match="Unsupported source_format"):
+        await _unwrap(import_to_google_slides)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            file_name="Deck",
+            file_url="https://example.com/deck.xlsx",
+            source_format="xlsx",
+        )
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_sheets_converts_csv_content(mock_resolve_folder):
+    """CSV content uploads as text/csv while the body targets Sheets."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "sheet123",
+        "name": "Data",
+        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+    }
+
+    result = await _unwrap(import_to_google_sheets)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="Data.csv",
+        content="a,b,c\n1,2,3",
+        source_format="csv",
+        folder_id="root",
+    )
+
+    body = mock_service.files.return_value.create.call_args.kwargs["body"]
+    assert body["mimeType"] == "application/vnd.google-apps.spreadsheet"
+    media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
+    assert media.mimetype() == "text/csv"
+    assert "Successfully imported" in result
+    assert "Spreadsheet ID" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_sheets_uses_google_api_retries(mock_resolve_folder):
+    """Sheets conversion upload uses googleapiclient's built-in write retries."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "sheet123",
+        "name": "Budget",
+        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+    }
+
+    await _unwrap(import_to_google_sheets)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="Budget.xlsx",
+        content="ignored",
+        source_format="xlsx",
+        folder_id="root",
+    )
+
+    execute_kwargs = (
+        mock_service.files.return_value.create.return_value.execute.call_args.kwargs
+    )
+    assert execute_kwargs["num_retries"] == 3

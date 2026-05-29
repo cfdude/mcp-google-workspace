@@ -1194,23 +1194,267 @@ GOOGLE_DOCS_IMPORT_FORMATS = {
     ".odt": "application/vnd.oasis.opendocument.text",
 }
 
+# Mapping of file extensions to source MIME types for Google Slides conversion
+GOOGLE_SLIDES_IMPORT_FORMATS = {
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
+}
+
+# Mapping of file extensions to source MIME types for Google Sheets conversion
+GOOGLE_SHEETS_IMPORT_FORMATS = {
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+}
+
 GOOGLE_DOCS_MIME_TYPE = "application/vnd.google-apps.document"
+GOOGLE_SLIDES_MIME_TYPE = "application/vnd.google-apps.presentation"
+GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
 
 
-def _detect_source_format(file_name: str, content: Optional[str] = None) -> str:
+def _detect_source_format(
+    file_name: str,
+    content: Optional[str] = None,
+    format_map: Optional[Dict[str, str]] = None,
+) -> str:
     """
     Detect the source MIME type based on file extension.
-    Falls back to text/plain if unknown.
+
+    Uses ``format_map`` (defaults to the Google Docs format map) to map the
+    extension. Falls back to text/plain if unknown.
     """
+    if format_map is None:
+        format_map = GOOGLE_DOCS_IMPORT_FORMATS
+
     ext = Path(file_name).suffix.lower()
-    if ext in GOOGLE_DOCS_IMPORT_FORMATS:
-        return GOOGLE_DOCS_IMPORT_FORMATS[ext]
+    if ext in format_map:
+        return format_map[ext]
 
     # If content is provided and looks like markdown, use markdown
     if content and (content.startswith("#") or "```" in content or "**" in content):
         return "text/markdown"
 
     return "text/plain"
+
+
+async def _import_with_conversion(
+    service,
+    *,
+    tool_name: str,
+    target_label: str,
+    id_label: str,
+    target_mime_type: str,
+    format_map: Dict[str, str],
+    user_google_email: str,
+    file_name: str,
+    content: Optional[str],
+    file_path: Optional[str],
+    file_url: Optional[str],
+    source_format: Optional[str],
+    folder_id: str,
+) -> str:
+    """
+    Shared implementation for the import_to_google_* tools.
+
+    Uploads source bytes (from content, a local file, or a remote URL) as media
+    while ``body.mimeType`` is the Google Apps ``target_mime_type``, letting Drive
+    auto-convert the Office/OpenDocument/text source into native Google format.
+
+    Args:
+        tool_name: Logging prefix and the tool's registered name (for messages).
+        target_label: Human-readable destination name (e.g. "Google Doc").
+        id_label: Label for the created file's ID in the confirmation message.
+        target_mime_type: The ``application/vnd.google-apps.*`` destination type.
+        format_map: Extension -> source MIME type allowlist for this destination.
+    """
+    logger.info(
+        f"[{tool_name}] Invoked. Email: '{user_google_email}', "
+        f"File Name: '{file_name}', Source Format: '{source_format}', Folder ID: '{folder_id}'"
+    )
+
+    # Validate inputs
+    source_count = sum(1 for x in [content, file_path, file_url] if x is not None)
+    if source_count == 0:
+        raise ValueError(
+            "You must provide one of: 'content', 'file_path', or 'file_url'."
+        )
+    if source_count > 1:
+        raise ValueError("Provide only one of: 'content', 'file_path', or 'file_url'.")
+
+    # Determine source MIME type
+    if source_format:
+        # Normalize format hint
+        format_key = f".{source_format.lower().lstrip('.')}"
+        if format_key in format_map:
+            source_mime_type = format_map[format_key]
+        else:
+            raise ValueError(
+                f"Unsupported source_format: '{source_format}'. "
+                f"Supported: {', '.join(ext.lstrip('.') for ext in format_map.keys())}"
+            )
+    else:
+        # Auto-detect from file_name, file_path, or file_url
+        detection_name = file_path or file_url or file_name
+        source_mime_type = _detect_source_format(detection_name, content, format_map)
+
+    logger.info(f"[{tool_name}] Detected source MIME type: {source_mime_type}")
+
+    # Clean up file name (remove extension since it becomes a Google Apps file)
+    doc_name = Path(file_name).stem if Path(file_name).suffix else file_name
+
+    # Resolve folder
+    resolved_folder_id = await resolve_folder_id(service, folder_id)
+
+    # File metadata - destination is the Google Apps target format
+    file_metadata = {
+        "name": doc_name,
+        "parents": [resolved_folder_id],
+        "mimeType": target_mime_type,  # Target format = Google Apps type
+    }
+
+    file_data: bytes
+    remote_file_data: Optional[BinaryIO] = None
+    remote_content_type: Optional[str] = None
+
+    # Handle content (string input for text formats)
+    if content is not None:
+        file_data = content.encode("utf-8")
+        logger.info(f"[{tool_name}] Using content: {len(file_data)} bytes")
+
+    # Handle file_path (local file)
+    elif file_path is not None:
+        parsed_url = urlparse(file_path)
+
+        # Handle file:// URL format
+        if parsed_url.scheme == "file":
+            raw_path = parsed_url.path or ""
+            netloc = parsed_url.netloc
+            if netloc and netloc.lower() != "localhost":
+                raw_path = f"//{netloc}{raw_path}"
+            actual_path = url2pathname(raw_path)
+        elif parsed_url.scheme == "":
+            # Regular path
+            actual_path = file_path
+        else:
+            raise ValueError(
+                f"file_path should be a local path or file:// URL, got: {file_path}"
+            )
+
+        path_obj = validate_file_path(actual_path)
+        if not path_obj.exists():
+            raise FileNotFoundError(f"File not found: {actual_path}")
+        if not path_obj.is_file():
+            raise ValueError(f"Path is not a file: {actual_path}")
+
+        file_data = await asyncio.to_thread(path_obj.read_bytes)
+        logger.info(f"[{tool_name}] Read local file: {len(file_data)} bytes")
+
+        # Re-detect format from actual file if not specified
+        if not source_format:
+            source_mime_type = _detect_source_format(actual_path, None, format_map)
+            logger.info(f"[{tool_name}] Re-detected from path: {source_mime_type}")
+
+    # Handle file_url (remote file)
+    elif file_url is not None:
+        parsed_url = urlparse(file_url)
+        if parsed_url.scheme not in ("http", "https"):
+            raise ValueError(f"file_url must be http:// or https://, got: {file_url}")
+
+        # SSRF protection: block internal/private network URLs and validate redirects
+        remote_file_data, remote_content_type = await _download_url_to_bytes(file_url)
+
+    # Upload with conversion
+    if remote_file_data is not None:
+        with remote_file_data:
+            remote_size = await _get_file_size(remote_file_data)
+
+            logger.info(f"[{tool_name}] Downloaded from URL: {remote_size} bytes")
+
+            # Prefer the Content-Type from the download; fall back to URL-based detection
+            if not source_format:
+                ct_base = (remote_content_type or "").split(";", 1)[0].strip()
+                if ct_base and ct_base != "application/octet-stream":
+                    source_mime_type = ct_base
+                    logger.info(
+                        f"[{tool_name}] Using Content-Type from response: {source_mime_type}"
+                    )
+                else:
+                    source_mime_type = _detect_source_format(file_url, None, format_map)
+                    logger.info(
+                        f"[{tool_name}] Detected from URL path: {source_mime_type}"
+                    )
+
+            media = MediaIoBaseUpload(
+                remote_file_data,
+                mimetype=source_mime_type,  # Source format
+                resumable=True,
+                chunksize=UPLOAD_CHUNK_SIZE_BYTES,
+            )
+
+            logger.info(
+                f"[{tool_name}] Uploading to Google Drive with conversion: "
+                f"{source_mime_type} → {target_mime_type}"
+            )
+
+            created_file = await asyncio.to_thread(
+                service.files()
+                .create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields="id, name, webViewLink, mimeType",
+                    supportsAllDrives=True,
+                )
+                .execute,
+                num_retries=GOOGLE_API_WRITE_RETRIES,
+            )
+    else:
+        media = MediaIoBaseUpload(
+            io.BytesIO(file_data),
+            mimetype=source_mime_type,  # Source format
+            resumable=True,
+            chunksize=UPLOAD_CHUNK_SIZE_BYTES,
+        )
+
+        logger.info(
+            f"[{tool_name}] Uploading to Google Drive with conversion: "
+            f"{source_mime_type} → {target_mime_type}"
+        )
+
+        created_file = await asyncio.to_thread(
+            service.files()
+            .create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name, webViewLink, mimeType",
+                supportsAllDrives=True,
+            )
+            .execute,
+            num_retries=GOOGLE_API_WRITE_RETRIES,
+        )
+
+    result_mime = created_file.get("mimeType", "unknown")
+    if result_mime != target_mime_type:
+        logger.warning(
+            f"[{tool_name}] Conversion may have failed. "
+            f"Expected {target_mime_type}, got {result_mime}"
+        )
+
+    link = created_file.get("webViewLink", "No link available")
+    doc_id = created_file.get("id", "N/A")
+
+    confirmation = (
+        f"✅ Successfully imported '{doc_name}' as {target_label}\n"
+        f"   {id_label}: {doc_id}\n"
+        f"   Source format: {source_mime_type}\n"
+        f"   Folder: {folder_id}\n"
+        f"   Link: {link}"
+    )
+
+    logger.info(f"[{tool_name}] Success. Link: {link}")
+    return confirmation
 
 
 @server.tool(
@@ -1268,195 +1512,154 @@ async def import_to_google_doc(
         # Import from URL
         import_to_google_doc(file_name="Remote Doc", file_url="https://example.com/doc.md")
     """
-    logger.info(
-        f"[import_to_google_doc] Invoked. Email: '{user_google_email}', "
-        f"File Name: '{file_name}', Source Format: '{source_format}', Folder ID: '{folder_id}'"
+    return await _import_with_conversion(
+        service,
+        tool_name="import_to_google_doc",
+        target_label="Google Doc",
+        id_label="Document ID",
+        target_mime_type=GOOGLE_DOCS_MIME_TYPE,
+        format_map=GOOGLE_DOCS_IMPORT_FORMATS,
+        user_google_email=user_google_email,
+        file_name=file_name,
+        content=content,
+        file_path=file_path,
+        file_url=file_url,
+        source_format=source_format,
+        folder_id=folder_id,
     )
 
-    # Validate inputs
-    source_count = sum(1 for x in [content, file_path, file_url] if x is not None)
-    if source_count == 0:
-        raise ValueError(
-            "You must provide one of: 'content', 'file_path', or 'file_url'."
-        )
-    if source_count > 1:
-        raise ValueError("Provide only one of: 'content', 'file_path', or 'file_url'.")
 
-    # Determine source MIME type
-    if source_format:
-        # Normalize format hint
-        format_key = f".{source_format.lower().lstrip('.')}"
-        if format_key in GOOGLE_DOCS_IMPORT_FORMATS:
-            source_mime_type = GOOGLE_DOCS_IMPORT_FORMATS[format_key]
-        else:
-            raise ValueError(
-                f"Unsupported source_format: '{source_format}'. "
-                f"Supported: {', '.join(ext.lstrip('.') for ext in GOOGLE_DOCS_IMPORT_FORMATS.keys())}"
-            )
-    else:
-        # Auto-detect from file_name, file_path, or file_url
-        detection_name = file_path or file_url or file_name
-        source_mime_type = _detect_source_format(detection_name, content)
+@server.tool(
+    title="Import to Google Slides",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("import_to_google_slides", service_type="drive")
+@require_google_service("drive", "drive_file")
+async def import_to_google_slides(
+    service,
+    user_google_email: str,
+    file_name: str,
+    file_path: Optional[str] = None,
+    file_url: Optional[str] = None,
+    source_format: Optional[str] = None,
+    folder_id: str = "root",
+) -> str:
+    """
+    Imports a presentation (PPTX, PPT, ODP) into Google Slides format with automatic conversion.
 
-    logger.info(f"[import_to_google_doc] Detected source MIME type: {source_mime_type}")
+    Google Drive automatically converts the source presentation to native Google Slides format,
+    preserving slides, layouts, text, and images.
+    For batch operations, prefer file_path for files on disk so callers do not need
+    to load full file contents into their context.
 
-    # Clean up file name (remove extension since it becomes a Google Doc)
-    doc_name = Path(file_name).stem if Path(file_name).suffix else file_name
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        file_name (str): The name for the new Google Slides presentation (extension will be ignored).
+        file_path (Optional[str]): Local file path or file:// URL for any supported format (PPTX, PPT, ODP). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
+        file_url (Optional[str]): Remote URL to fetch the presentation from (http/https).
+        source_format (Optional[str]): Source format hint ('pptx', 'ppt', 'odp').
+                                       Auto-detected from file_name extension if not provided.
+        folder_id (str): The ID of the parent folder. Defaults to 'root'.
 
-    # Resolve folder
-    resolved_folder_id = await resolve_folder_id(service, folder_id)
+    Returns:
+        str: Confirmation message with the new Google Slides link.
 
-    # File metadata - destination is Google Docs format
-    file_metadata = {
-        "name": doc_name,
-        "parents": [resolved_folder_id],
-        "mimeType": GOOGLE_DOCS_MIME_TYPE,  # Target format = Google Docs
-    }
+    Examples:
+        # Import a local PowerPoint file (preferred for batch operations)
+        import_to_google_slides(file_name="Deck", file_path="/path/to/deck.pptx")
 
-    file_data: bytes
-    remote_file_data: Optional[BinaryIO] = None
-    remote_content_type: Optional[str] = None
-
-    # Handle content (string input for text formats)
-    if content is not None:
-        file_data = content.encode("utf-8")
-        logger.info(f"[import_to_google_doc] Using content: {len(file_data)} bytes")
-
-    # Handle file_path (local file)
-    elif file_path is not None:
-        parsed_url = urlparse(file_path)
-
-        # Handle file:// URL format
-        if parsed_url.scheme == "file":
-            raw_path = parsed_url.path or ""
-            netloc = parsed_url.netloc
-            if netloc and netloc.lower() != "localhost":
-                raw_path = f"//{netloc}{raw_path}"
-            actual_path = url2pathname(raw_path)
-        elif parsed_url.scheme == "":
-            # Regular path
-            actual_path = file_path
-        else:
-            raise ValueError(
-                f"file_path should be a local path or file:// URL, got: {file_path}"
-            )
-
-        path_obj = validate_file_path(actual_path)
-        if not path_obj.exists():
-            raise FileNotFoundError(f"File not found: {actual_path}")
-        if not path_obj.is_file():
-            raise ValueError(f"Path is not a file: {actual_path}")
-
-        file_data = await asyncio.to_thread(path_obj.read_bytes)
-        logger.info(f"[import_to_google_doc] Read local file: {len(file_data)} bytes")
-
-        # Re-detect format from actual file if not specified
-        if not source_format:
-            source_mime_type = _detect_source_format(actual_path)
-            logger.info(
-                f"[import_to_google_doc] Re-detected from path: {source_mime_type}"
-            )
-
-    # Handle file_url (remote file)
-    elif file_url is not None:
-        parsed_url = urlparse(file_url)
-        if parsed_url.scheme not in ("http", "https"):
-            raise ValueError(f"file_url must be http:// or https://, got: {file_url}")
-
-        # SSRF protection: block internal/private network URLs and validate redirects
-        remote_file_data, remote_content_type = await _download_url_to_bytes(file_url)
-
-    # Upload with conversion
-    if remote_file_data is not None:
-        with remote_file_data:
-            remote_size = await _get_file_size(remote_file_data)
-
-            logger.info(
-                f"[import_to_google_doc] Downloaded from URL: {remote_size} bytes"
-            )
-
-            # Prefer the Content-Type from the download; fall back to URL-based detection
-            if not source_format:
-                ct_base = (remote_content_type or "").split(";", 1)[0].strip()
-                if ct_base and ct_base != "application/octet-stream":
-                    source_mime_type = ct_base
-                    logger.info(
-                        f"[import_to_google_doc] Using Content-Type from response: {source_mime_type}"
-                    )
-                else:
-                    source_mime_type = _detect_source_format(file_url)
-                    logger.info(
-                        f"[import_to_google_doc] Detected from URL path: {source_mime_type}"
-                    )
-
-            media = MediaIoBaseUpload(
-                remote_file_data,
-                mimetype=source_mime_type,  # Source format
-                resumable=True,
-                chunksize=UPLOAD_CHUNK_SIZE_BYTES,
-            )
-
-            logger.info(
-                f"[import_to_google_doc] Uploading to Google Drive with conversion: "
-                f"{source_mime_type} → {GOOGLE_DOCS_MIME_TYPE}"
-            )
-
-            created_file = await asyncio.to_thread(
-                service.files()
-                .create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id, name, webViewLink, mimeType",
-                    supportsAllDrives=True,
-                )
-                .execute,
-                num_retries=GOOGLE_API_WRITE_RETRIES,
-            )
-    else:
-        media = MediaIoBaseUpload(
-            io.BytesIO(file_data),
-            mimetype=source_mime_type,  # Source format
-            resumable=True,
-            chunksize=UPLOAD_CHUNK_SIZE_BYTES,
-        )
-
-        logger.info(
-            f"[import_to_google_doc] Uploading to Google Drive with conversion: "
-            f"{source_mime_type} → {GOOGLE_DOCS_MIME_TYPE}"
-        )
-
-        created_file = await asyncio.to_thread(
-            service.files()
-            .create(
-                body=file_metadata,
-                media_body=media,
-                fields="id, name, webViewLink, mimeType",
-                supportsAllDrives=True,
-            )
-            .execute,
-            num_retries=GOOGLE_API_WRITE_RETRIES,
-        )
-
-    result_mime = created_file.get("mimeType", "unknown")
-    if result_mime != GOOGLE_DOCS_MIME_TYPE:
-        logger.warning(
-            f"[import_to_google_doc] Conversion may have failed. "
-            f"Expected {GOOGLE_DOCS_MIME_TYPE}, got {result_mime}"
-        )
-
-    link = created_file.get("webViewLink", "No link available")
-    doc_id = created_file.get("id", "N/A")
-
-    confirmation = (
-        f"✅ Successfully imported '{doc_name}' as Google Doc\n"
-        f"   Document ID: {doc_id}\n"
-        f"   Source format: {source_mime_type}\n"
-        f"   Folder: {folder_id}\n"
-        f"   Link: {link}"
+        # Import from URL
+        import_to_google_slides(file_name="Remote Deck", file_url="https://example.com/deck.pptx")
+    """
+    return await _import_with_conversion(
+        service,
+        tool_name="import_to_google_slides",
+        target_label="Google Slides presentation",
+        id_label="Presentation ID",
+        target_mime_type=GOOGLE_SLIDES_MIME_TYPE,
+        format_map=GOOGLE_SLIDES_IMPORT_FORMATS,
+        user_google_email=user_google_email,
+        file_name=file_name,
+        content=None,
+        file_path=file_path,
+        file_url=file_url,
+        source_format=source_format,
+        folder_id=folder_id,
     )
 
-    logger.info(f"[import_to_google_doc] Success. Link: {link}")
-    return confirmation
+
+@server.tool(
+    title="Import to Google Sheets",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("import_to_google_sheets", service_type="drive")
+@require_google_service("drive", "drive_file")
+async def import_to_google_sheets(
+    service,
+    user_google_email: str,
+    file_name: str,
+    content: Optional[str] = None,
+    file_path: Optional[str] = None,
+    file_url: Optional[str] = None,
+    source_format: Optional[str] = None,
+    folder_id: str = "root",
+) -> str:
+    """
+    Imports a spreadsheet (XLSX, XLS, ODS, CSV, TSV) into Google Sheets format with automatic conversion.
+
+    Google Drive automatically converts the source spreadsheet to native Google Sheets format,
+    preserving rows, columns, sheets, and values.
+    For batch operations, prefer file_path for files on disk so callers do not need
+    to load full file contents into their context.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        file_name (str): The name for the new Google Sheets spreadsheet (extension will be ignored).
+        content (Optional[str]): Text content for text-based formats (CSV, TSV). Use only for short snippets or content already in memory.
+        file_path (Optional[str]): Local file path or file:// URL for any supported format (XLSX, XLS, ODS, CSV, TSV). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
+        file_url (Optional[str]): Remote URL to fetch the spreadsheet from (http/https).
+        source_format (Optional[str]): Source format hint ('xlsx', 'xls', 'ods', 'csv', 'tsv').
+                                       Auto-detected from file_name extension if not provided.
+        folder_id (str): The ID of the parent folder. Defaults to 'root'.
+
+    Returns:
+        str: Confirmation message with the new Google Sheets link.
+
+    Examples:
+        # Import a local Excel file (preferred for batch operations)
+        import_to_google_sheets(file_name="Budget", file_path="/path/to/budget.xlsx")
+
+        # Import CSV content directly
+        import_to_google_sheets(file_name="Data.csv", content="a,b,c\\n1,2,3", source_format="csv")
+
+        # Import from URL
+        import_to_google_sheets(file_name="Remote Sheet", file_url="https://example.com/data.xlsx")
+    """
+    return await _import_with_conversion(
+        service,
+        tool_name="import_to_google_sheets",
+        target_label="Google Sheets spreadsheet",
+        id_label="Spreadsheet ID",
+        target_mime_type=GOOGLE_SHEETS_MIME_TYPE,
+        format_map=GOOGLE_SHEETS_IMPORT_FORMATS,
+        user_google_email=user_google_email,
+        file_name=file_name,
+        content=content,
+        file_path=file_path,
+        file_url=file_url,
+        source_format=source_format,
+        folder_id=folder_id,
+    )
 
 
 @server.tool(
