@@ -54,9 +54,15 @@ def _normalize_origin(origin: str) -> Optional[str]:
         return None
     if parsed.scheme == "vscode-webview":
         return f"vscode-webview://{parsed.netloc}" if parsed.netloc else None
-    if not parsed.netloc:
+    if not parsed.hostname:
         return None
-    return f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    netloc = f"{host}:{port}" if port is not None else host
+    return f"{parsed.scheme}://{netloc}"
 
 
 def _is_loopback_origin(origin: str) -> bool:
@@ -80,6 +86,15 @@ def _get_allowed_http_origins() -> set[str]:
     return origins
 
 
+def _is_origin_allowed(origin: str) -> bool:
+    if _is_loopback_origin(origin):
+        return True
+    normalized = _normalize_origin(origin)
+    if not normalized:
+        return False
+    return normalized in _get_allowed_http_origins()
+
+
 class OriginValidationMiddleware:
     """Reject browser-originated HTTP requests from untrusted origins."""
 
@@ -92,11 +107,7 @@ class OriginValidationMiddleware:
             raw_origin = headers.get(b"origin")
             if raw_origin:
                 origin = raw_origin.decode("latin-1")
-                normalized = _normalize_origin(origin)
-                allowed = _get_allowed_http_origins()
-                if not normalized or (
-                    normalized not in allowed and not _is_loopback_origin(origin)
-                ):
+                if not _is_origin_allowed(origin):
                     logger.warning("Rejected HTTP request from Origin: %s", origin)
                     response = JSONResponse(
                         {"error": "Origin not allowed"}, status_code=403

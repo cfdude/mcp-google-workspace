@@ -1334,6 +1334,8 @@ export DWD_ALLOWED_DOMAINS="corp.com,subsidiary.io"
 ```
 
 *Note: Make sure to start the server with `--transport streamable-http` when using VS Code MCP. For remote or shared HTTP endpoints, see the [OAuth 2.1 note in the HTTP Mode section](#http-mode-for-debugging-or-web-interfaces).*
+
+> **Origin validation**: VS Code webview clients send a `vscode-webview://<extension-id>` origin, which is rejected by default. Add the specific origin to `OAUTH_ALLOWED_ORIGINS` (e.g. `OAUTH_ALLOWED_ORIGINS=vscode-webview://your.extension-id`) to permit it. Connections to a `localhost`/`127.0.0.1` URL are allowed without extra configuration.
 </details>
 
 ### Claude Code MCP Client Support
