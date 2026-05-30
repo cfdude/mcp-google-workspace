@@ -22,7 +22,9 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_resolve_log_dir_defaults_to_home_workspace_mcp_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(os.path, "expanduser", lambda p: "/home/user" if p == "~" else p)
+    monkeypatch.setattr(
+        os.path, "expanduser", lambda p: "/home/user" if p == "~" else p
+    )
 
     resolved = log_formatter._resolve_log_dir()
 
@@ -88,7 +90,9 @@ def test_configure_file_logging_disabled_in_stateless_mode(
     monkeypatch.setenv("WORKSPACE_MCP_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("WORKSPACE_MCP_STATELESS_MODE", "true")
 
-    assert log_formatter.configure_file_logging("tests.log_formatter.stateless") is False
+    assert (
+        log_formatter.configure_file_logging("tests.log_formatter.stateless") is False
+    )
     assert not (tmp_path / "mcp_server_debug.log").exists()
 
 
