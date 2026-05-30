@@ -77,11 +77,7 @@ that send ``'[{"key":"val"}]'`` instead of ``[{"key":"val"}]``.
 
 
 ObjectList = Annotated[List[object], BeforeValidator(_coerce_json_str_to_list)]
-"""``List[object]`` that also accepts a JSON-encoded string of an array.
-
-Use in tool signatures instead of ``List[object]`` to work around MCP clients
-that send ``'["value"]'`` instead of ``["value"]`` for heterogeneous arrays.
-"""
+"""``List[object]`` that also accepts a JSON-encoded string of an array."""
 
 
 def _coerce_json_str_to_dict(v: Any) -> Any:

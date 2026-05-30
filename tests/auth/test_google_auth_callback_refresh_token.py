@@ -26,10 +26,6 @@ class _DummyOAuthStore:
             "session_id": None,
             "code_verifier": "verifier",
         }
-        # Session id recorded on the OAuth state at auth-URL generation time. When
-        # left unset the dummy echoes the session_id passed to the callback (the
-        # pre-existing behaviour); set it to emulate an HTTP callback where the
-        # initiating MCP session differs from the (empty) callback session.
         self._bound_state_session_id = bound_state_session_id
         self.latest_calls = []
         self.stored_refresh_token = None
@@ -342,13 +338,7 @@ async def test_callback_binds_credentials_to_originating_session_when_session_mi
     monkeypatch,
     caplog,
 ):
-    """Regression for #810.
-
-    In HTTP transports the browser callback carries no MCP session, so the
-    caller passes session_id=None. The session that initiated the flow is
-    recorded on the OAuth state, and the new credentials must be bound to it —
-    otherwise the live MCP session never maps to the user and auth loops.
-    """
+    """Bind callbacks to the MCP session stored on OAuth state."""
     callback_credentials = _make_credentials(refresh_token="callback-refresh-token")
     oauth_store = _DummyOAuthStore(
         session_credentials=None,
@@ -385,11 +375,8 @@ async def test_callback_binds_credentials_to_originating_session_when_session_mi
         session_id=None,
     )
 
-    # Credentials are persisted to the session store bound to the originating
-    # MCP session, not None.
     assert oauth_store.store_calls == 1
     assert oauth_store.store_kwargs[-1]["mcp_session_id"] == "originating-mcp-session"
-    # And the session cache is primed under the same id for the next tool call.
     assert session_cache_writes == [("originating-mcp-session", callback_credentials)]
     assert "originating-mcp-session" not in caplog.text
     assert "sha256:" in caplog.text

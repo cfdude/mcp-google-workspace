@@ -710,12 +710,6 @@ async def handle_auth_callback(
             state_info.get("session_id") or "<unknown>",
         )
 
-        # In HTTP transports the callback is a plain browser request with no MCP
-        # session attached, so the caller passes session_id=None. The session that
-        # actually initiated the flow was recorded on the OAuth state at auth-URL
-        # generation time, so recover it here and bind the new credentials to it.
-        # Without this the live MCP session never maps to the user, every later
-        # tool call misses the session lookup, and auth loops forever (issue #810).
         if not session_id:
             originating_session_id = state_info.get("session_id")
             if originating_session_id:

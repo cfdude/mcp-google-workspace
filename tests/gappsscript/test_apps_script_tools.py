@@ -36,9 +36,6 @@ from gappsscript.apps_script_tools import (
 )
 
 
-# Regression: #712 — some MCP clients serialise array args as JSON strings.
-# run_script_function's ``parameters`` must coerce '["x"]' -> ["x"] rather than
-# failing pydantic validation before the call reaches the Apps Script API.
 def _parameters_adapter():
     hint = get_type_hints(run_script_function, include_extras=True)["parameters"]
     return TypeAdapter(hint)

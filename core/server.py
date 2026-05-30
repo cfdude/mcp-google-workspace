@@ -726,12 +726,6 @@ async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
             f"OAuth callback: Successfully authenticated user: {verified_user_id}."
         )
 
-        # handle_auth_callback already persisted the credentials to the OAuth 2.1
-        # session store and bound them to the MCP session that initiated the flow
-        # (recovered from the OAuth state). Re-storing here with the browser
-        # request's empty mcp_session_id would wipe that binding and re-introduce
-        # the re-auth loop (issue #810), so we deliberately do not store again.
-
         return create_success_response(verified_user_id)
     except Exception as e:
         logger.error(f"Error processing OAuth callback: {str(e)}", exc_info=True)
