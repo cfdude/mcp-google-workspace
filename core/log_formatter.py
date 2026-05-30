@@ -11,6 +11,27 @@ import re
 import sys
 
 
+class SuppressStatelessTransportTerminationFilter(logging.Filter):
+    """Drop noisy SDK cleanup logs emitted for stateless HTTP transports."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (
+            record.name == "mcp.server.streamable_http"
+            and record.levelno == logging.INFO
+            and record.getMessage() == "Terminating session: None"
+        )
+
+
+def install_noisy_log_filters() -> None:
+    """Install targeted filters for known noisy third-party log lines."""
+    target_logger = logging.getLogger("mcp.server.streamable_http")
+    if not any(
+        isinstance(existing, SuppressStatelessTransportTerminationFilter)
+        for existing in target_logger.filters
+    ):
+        target_logger.addFilter(SuppressStatelessTransportTerminationFilter())
+
+
 class EnhancedLogFormatter(logging.Formatter):
     """Custom log formatter that adds ASCII prefixes and visual enhancements to log messages."""
 
