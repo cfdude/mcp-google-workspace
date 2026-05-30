@@ -1616,6 +1616,38 @@ async def test_import_to_google_slides_converts_pptx(
 
 
 @pytest.mark.asyncio
+@patch("gdrive.drive_helpers._download_url_to_bytes", new_callable=AsyncMock)
+@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+async def test_import_to_google_slides_detects_extension_before_url_query(
+    mock_resolve_folder, mock_download
+):
+    """URL auto-detection uses the path suffix, not query-string text."""
+    mock_resolve_folder.return_value = "resolved_root"
+    mock_download.return_value = (io.BytesIO(b"PPTX-BYTES"), None)
+    mock_service = Mock()
+    mock_service.files().create().execute.return_value = {
+        "id": "deck123",
+        "name": "Deck",
+        "webViewLink": "https://docs.google.com/presentation/d/deck123",
+        "mimeType": "application/vnd.google-apps.presentation",
+    }
+
+    await _unwrap(import_to_google_slides)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_name="Deck",
+        file_url="https://example.com/deck.pptx?download=1",
+        folder_id="root",
+    )
+
+    media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
+    assert (
+        media.mimetype()
+        == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_import_to_google_slides_rejects_unsupported_format():
     """A spreadsheet source_format is rejected by the Slides tool."""
     mock_service = Mock()
@@ -1832,6 +1864,61 @@ async def test_update_drive_file_replaces_content_with_conversion(mock_resolve_i
     )
     assert execute_kwargs["num_retries"] == 3
     assert "Replaced content" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_update_drive_file_replaces_sheet_content_with_sheet_formats(
+    mock_resolve_item,
+):
+    """Sheet replacement uses the Sheets source allowlist, not the Docs allowlist."""
+    mock_resolve_item.return_value = (
+        "sheet123",
+        {"name": "Budget", "mimeType": "application/vnd.google-apps.spreadsheet"},
+    )
+    mock_service = Mock()
+    mock_service.files().update().execute.return_value = {
+        "id": "sheet123",
+        "name": "Budget",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123",
+    }
+
+    result = await _unwrap(update_drive_file)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_id="sheet123",
+        content="month,total\nMay,42",
+        source_format="csv",
+    )
+
+    update_kwargs = mock_service.files.return_value.update.call_args.kwargs
+    assert update_kwargs["media_body"].mimetype() == "text/csv"
+    assert "Replaced content" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_update_drive_file_rejects_content_replacement_for_unsupported_targets(
+    mock_resolve_item,
+):
+    """Non-Google Apps files fail before an ambiguous conversion upload."""
+    mock_resolve_item.return_value = (
+        "pdf123",
+        {"name": "Report.pdf", "mimeType": "application/pdf"},
+    )
+    mock_service = Mock()
+
+    with pytest.raises(ValueError, match="only supported for native Google Docs"):
+        await _unwrap(update_drive_file)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            file_id="pdf123",
+            content="# Replacement",
+            source_format="md",
+        )
+
+    mock_service.files.return_value.update.return_value.execute.assert_not_called()
 
 
 @pytest.mark.asyncio

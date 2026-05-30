@@ -62,6 +62,12 @@ logger = logging.getLogger(__name__)
 
 SHARED_DRIVE_ORGANIZER_CONCURRENCY_LIMIT = 10
 
+IMPORT_FORMATS_BY_GOOGLE_MIME_TYPE = {
+    GOOGLE_DOCS_MIME_TYPE: GOOGLE_DOCS_IMPORT_FORMATS,
+    GOOGLE_SHEETS_MIME_TYPE: GOOGLE_SHEETS_IMPORT_FORMATS,
+    GOOGLE_SLIDES_MIME_TYPE: GOOGLE_SLIDES_IMPORT_FORMATS,
+}
+
 
 @server.tool(
     title="Search Drive Files",
@@ -1820,6 +1826,19 @@ async def update_drive_file(
     replacing_content = any(x is not None for x in (content, file_path, file_url))
     remote_file_data = None
     if replacing_content:
+        target_mime_type = mime_type or current_file.get("mimeType")
+        format_map = IMPORT_FORMATS_BY_GOOGLE_MIME_TYPE.get(target_mime_type)
+        if format_map is None:
+            supported_targets = ", ".join(
+                mime for mime in IMPORT_FORMATS_BY_GOOGLE_MIME_TYPE
+            )
+            raise ValueError(
+                "Content replacement with conversion is only supported for native "
+                f"Google Docs, Sheets, and Slides files. Current target MIME type: "
+                f"{target_mime_type or 'unknown'}. Supported target MIME types: "
+                f"{supported_targets}."
+            )
+
         media, _source_mime_type, remote_file_data = await _resolve_import_media(
             tool_name="update_drive_file",
             file_name=name or current_file.get("name", ""),
@@ -1827,7 +1846,7 @@ async def update_drive_file(
             file_path=file_path,
             file_url=file_url,
             source_format=source_format,
-            format_map=GOOGLE_DOCS_IMPORT_FORMATS,
+            format_map=format_map,
         )
         query_params["media_body"] = media
 

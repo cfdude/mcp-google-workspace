@@ -578,7 +578,9 @@ async def _resolve_import_media(
             )
         source_mime_type = format_map[format_key]
     else:
-        detection_name = file_path or file_url or file_name
+        detection_name = file_path or file_name
+        if file_url is not None:
+            detection_name = urlparse(file_url).path or file_url
         source_mime_type = _detect_source_format(detection_name, content, format_map)
 
     logger.info(f"[{tool_name}] Detected source MIME type: {source_mime_type}")
@@ -637,7 +639,9 @@ async def _resolve_import_media(
             if ct_base and ct_base in format_map.values():
                 source_mime_type = ct_base
             else:
-                source_mime_type = _detect_source_format(file_url, None, format_map)
+                source_mime_type = _detect_source_format(
+                    parsed_url.path or file_url, None, format_map
+                )
 
     # Enforce the allowlist on the final resolved MIME type so auto-detection can't
     # upload an unsupported source (e.g. text/plain from an unknown extension).
