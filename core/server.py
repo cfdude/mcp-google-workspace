@@ -15,7 +15,7 @@ install_startup_warning_filters()
 from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
 from auth.mcp_session_middleware import MCPSessionMiddleware
-from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
+from auth.oauth21_session_store import set_auth_provider
 from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 from auth.oauth_responses import (
     create_error_response,
@@ -725,27 +725,6 @@ async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
         logger.info(
             f"OAuth callback: Successfully authenticated user: {verified_user_id}."
         )
-
-        try:
-            store = get_oauth21_session_store()
-
-            store.store_session(
-                user_email=verified_user_id,
-                access_token=credentials.token,
-                refresh_token=credentials.refresh_token,
-                token_uri=credentials.token_uri,
-                client_id=credentials.client_id,
-                client_secret=credentials.client_secret,
-                scopes=credentials.scopes,
-                expiry=credentials.expiry,
-                session_id=f"google-{state}",
-                mcp_session_id=mcp_session_id,
-            )
-            logger.info(
-                f"Stored Google credentials in OAuth 2.1 session store for {verified_user_id}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to store credentials in OAuth 2.1 store: {e}")
 
         return create_success_response(verified_user_id)
     except Exception as e:
