@@ -178,12 +178,30 @@ def setup_enhanced_logging(
         root_logger.addHandler(console_handler)
 
 
-def configure_file_logging(logger_name: str = None) -> bool:
+def _resolve_log_dir() -> str:
+    """Resolve the directory used for file logging.
+
+    Priority:
+    1. ``WORKSPACE_MCP_LOG_DIR`` (preferred)
+    2. ``~/.google_workspace_mcp/logs`` (default)
+
+    Tilde expansion is applied to env-var values so paths like ``~/logs`` work.
+    """
+    env_log_dir = os.getenv("WORKSPACE_MCP_LOG_DIR")
+    if env_log_dir:
+        return os.path.expanduser(env_log_dir)
+    return os.path.join(os.path.expanduser("~"), ".google_workspace_mcp", "logs")
+
+
+def configure_file_logging(logger_name: str | None = None) -> bool:
     """
     Configure file logging based on stateless mode setting.
 
     In stateless mode, file logging is completely disabled to avoid filesystem writes.
     In normal mode, sets up detailed file logging to 'mcp_server_debug.log'.
+
+    The log directory defaults to ``~/.google_workspace_mcp/logs`` and may be
+    overridden via the ``WORKSPACE_MCP_LOG_DIR`` environment variable.
 
     Args:
         logger_name: Optional name for the logger (defaults to root logger)
@@ -206,7 +224,7 @@ def configure_file_logging(logger_name: str = None) -> bool:
         target_logger = logging.getLogger(logger_name)
 
         # Write logs to user-specific directory, not the package directory
-        log_dir = os.path.join(os.path.expanduser("~"), ".google_workspace_mcp", "logs")
+        log_dir = _resolve_log_dir()
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
         log_file_path = os.path.join(log_dir, "mcp_server_debug.log")
 

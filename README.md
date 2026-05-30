@@ -262,6 +262,7 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 | `MCP_ENABLE_OAUTH21` | | `true` to enable OAuth 2.1 multi-user support. Required for remote or shared HTTP endpoints (`--transport streamable-http`); optional for local-only legacy HTTP, which binds to `127.0.0.1` by default. |
 | `EXTERNAL_OAUTH21_PROVIDER` | | `true` for external OAuth flow with bearer tokens |
 | `WORKSPACE_MCP_STATELESS_MODE` | | `true` for stateless container-friendly operation |
+| `WORKSPACE_MCP_LOG_DIR` | | Directory for `mcp_server_debug.log` — defaults to `~/.google_workspace_mcp/logs` |
 | `GOOGLE_OAUTH_REDIRECT_URI` | | Override OAuth callback URL — default auto-constructed |
 | `OAUTH_CUSTOM_REDIRECT_URIS` | | Comma-separated additional redirect URIs |
 | `OAUTH_ALLOWED_ORIGINS` | | Comma-separated additional CORS origins |
