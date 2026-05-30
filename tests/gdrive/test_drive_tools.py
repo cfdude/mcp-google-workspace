@@ -22,6 +22,7 @@ from gdrive.drive_tools import (
     import_to_google_slides,
     list_drive_items,
     search_drive_files,
+    update_drive_file,
 )
 
 
@@ -1578,7 +1579,7 @@ def test_resolve_file_type_mime_empty_raises():
 
 
 @pytest.mark.asyncio
-@patch("gdrive.drive_tools._download_url_to_bytes", new_callable=AsyncMock)
+@patch("gdrive.drive_helpers._download_url_to_bytes", new_callable=AsyncMock)
 @patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
 async def test_import_to_google_slides_converts_pptx(
     mock_resolve_folder, mock_download
@@ -1716,7 +1717,7 @@ async def test_import_rejects_content_for_binary_format(mock_resolve_folder):
 
 @pytest.mark.asyncio
 @patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
-@patch("gdrive.drive_tools.validate_file_path")
+@patch("gdrive.drive_helpers.validate_file_path")
 async def test_import_to_google_slides_rejects_unsupported_source_via_allowlist(
     mock_validate_path, mock_resolve_folder
 ):
@@ -1791,3 +1792,67 @@ async def test_import_to_google_doc_accepts_markdown_content(mock_resolve_folder
     media = mock_service.files.return_value.create.call_args.kwargs["media_body"]
     assert media.mimetype() == "text/markdown"
     assert "Successfully imported" in result
+
+
+# ---------------------------------------------------------------------------
+# update_drive_file — in-place content replacement with conversion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_update_drive_file_replaces_content_with_conversion(mock_resolve_item):
+    """Markdown content uploads as media on update, preserving the file ID."""
+    mock_resolve_item.return_value = (
+        "doc123",
+        {"name": "Living Doc", "mimeType": "application/vnd.google-apps.document"},
+    )
+    mock_service = Mock()
+    mock_service.files().update().execute.return_value = {
+        "id": "doc123",
+        "name": "Living Doc",
+        "mimeType": "application/vnd.google-apps.document",
+        "webViewLink": "https://docs.google.com/document/d/doc123",
+    }
+
+    result = await _unwrap(update_drive_file)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_id="doc123",
+        content="# New Heading",
+        source_format="md",
+    )
+
+    update_kwargs = mock_service.files.return_value.update.call_args.kwargs
+    assert update_kwargs["fileId"] == "doc123"
+    assert update_kwargs["media_body"].mimetype() == "text/markdown"
+    assert "body" not in update_kwargs  # content-only: no metadata body
+    execute_kwargs = (
+        mock_service.files.return_value.update.return_value.execute.call_args.kwargs
+    )
+    assert execute_kwargs["num_retries"] == 3
+    assert "Replaced content" in result
+
+
+@pytest.mark.asyncio
+@patch("gdrive.drive_tools.resolve_drive_item", new_callable=AsyncMock)
+async def test_update_drive_file_metadata_only_uploads_no_media(mock_resolve_item):
+    """A metadata-only update sends no media_body."""
+    mock_resolve_item.return_value = ("file123", {"name": "Old Name"})
+    mock_service = Mock()
+    mock_service.files().update().execute.return_value = {
+        "id": "file123",
+        "name": "New Name",
+        "webViewLink": "https://drive.google.com/file/d/file123",
+    }
+
+    result = await _unwrap(update_drive_file)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        file_id="file123",
+        name="New Name",
+    )
+
+    update_kwargs = mock_service.files.return_value.update.call_args.kwargs
+    assert "media_body" not in update_kwargs
+    assert "Successfully updated file" in result
