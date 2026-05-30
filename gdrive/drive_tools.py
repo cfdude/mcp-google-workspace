@@ -1388,7 +1388,7 @@ async def _import_with_conversion(
         # Prefer the Content-Type from the download; fall back to URL-based detection
         if not source_format:
             ct_base = (remote_content_type or "").split(";", 1)[0].strip()
-            if ct_base and ct_base != "application/octet-stream":
+            if ct_base and ct_base in format_map.values():
                 source_mime_type = ct_base
                 logger.info(
                     f"[{tool_name}] Using Content-Type from response: {source_mime_type}"
