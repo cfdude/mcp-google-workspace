@@ -2,6 +2,7 @@
 
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from core.log_formatter import SuppressStatelessTransportTerminationFilter
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Ensure each test starts with the relevant env vars unset."""
     monkeypatch.delenv("WORKSPACE_MCP_LOG_DIR", raising=False)
     monkeypatch.delenv("WORKSPACE_MCP_STATELESS_MODE", raising=False)

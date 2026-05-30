@@ -193,7 +193,7 @@ def _resolve_log_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".google_workspace_mcp", "logs")
 
 
-def configure_file_logging(logger_name: str = None) -> bool:
+def configure_file_logging(logger_name: str | None = None) -> bool:
     """
     Configure file logging based on stateless mode setting.
 
