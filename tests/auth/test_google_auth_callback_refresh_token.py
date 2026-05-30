@@ -340,6 +340,7 @@ async def test_callback_aborts_session_persistence_when_store_write_fails(monkey
 @pytest.mark.asyncio
 async def test_callback_binds_credentials_to_originating_session_when_session_missing(
     monkeypatch,
+    caplog,
 ):
     """Regression for #810.
 
@@ -375,6 +376,7 @@ async def test_callback_binds_credentials_to_originating_session_when_session_mi
         lambda *args: session_cache_writes.append(args),
     )
     monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
+    caplog.set_level("INFO", logger="auth.google_auth")
 
     await handle_auth_callback(
         scopes=["scope.a"],
@@ -389,3 +391,5 @@ async def test_callback_binds_credentials_to_originating_session_when_session_mi
     assert oauth_store.store_kwargs[-1]["mcp_session_id"] == "originating-mcp-session"
     # And the session cache is primed under the same id for the next tool call.
     assert session_cache_writes == [("originating-mcp-session", callback_credentials)]
+    assert "originating-mcp-session" not in caplog.text
+    assert "sha256:" in caplog.text
