@@ -3,6 +3,8 @@ from google.oauth2.credentials import Credentials
 
 from auth.google_auth import handle_auth_callback
 
+_UNSET = object()
+
 
 class _DummyFlow:
     def __init__(self, credentials):
@@ -13,18 +15,34 @@ class _DummyFlow:
 
 
 class _DummyOAuthStore:
-    def __init__(self, session_credentials=None, latest_state_info=None):
+    def __init__(
+        self,
+        session_credentials=None,
+        latest_state_info=None,
+        bound_state_session_id=_UNSET,
+    ):
         self._session_credentials = session_credentials
         self._latest_state_info = latest_state_info or {
             "session_id": None,
             "code_verifier": "verifier",
         }
+        # Session id recorded on the OAuth state at auth-URL generation time. When
+        # left unset the dummy echoes the session_id passed to the callback (the
+        # pre-existing behaviour); set it to emulate an HTTP callback where the
+        # initiating MCP session differs from the (empty) callback session.
+        self._bound_state_session_id = bound_state_session_id
         self.latest_calls = []
         self.stored_refresh_token = None
         self.store_calls = 0
+        self.store_kwargs = []
 
     def validate_and_consume_oauth_state(self, state, session_id=None):  # noqa: ARG002
-        return {"session_id": session_id, "code_verifier": "verifier"}
+        bound = (
+            session_id
+            if self._bound_state_session_id is _UNSET
+            else self._bound_state_session_id
+        )
+        return {"session_id": bound, "code_verifier": "verifier"}
 
     def consume_latest_oauth_state(
         self,
@@ -40,6 +58,7 @@ class _DummyOAuthStore:
     def store_session(self, **kwargs):
         self.store_calls += 1
         self.stored_refresh_token = kwargs.get("refresh_token")
+        self.store_kwargs.append(kwargs)
 
 
 class _DummyCredentialStore:
@@ -316,3 +335,57 @@ async def test_callback_aborts_session_persistence_when_store_write_fails(monkey
     assert credential_store.saved_credentials.refresh_token == "callback-refresh-token"
     assert oauth_store.store_calls == 0
     assert session_cache_writes == []
+
+
+@pytest.mark.asyncio
+async def test_callback_binds_credentials_to_originating_session_when_session_missing(
+    monkeypatch,
+):
+    """Regression for #810.
+
+    In HTTP transports the browser callback carries no MCP session, so the
+    caller passes session_id=None. The session that initiated the flow is
+    recorded on the OAuth state, and the new credentials must be bound to it —
+    otherwise the live MCP session never maps to the user and auth loops.
+    """
+    callback_credentials = _make_credentials(refresh_token="callback-refresh-token")
+    oauth_store = _DummyOAuthStore(
+        session_credentials=None,
+        bound_state_session_id="originating-mcp-session",
+    )
+    credential_store = _DummyCredentialStore(existing_credentials=None)
+    session_cache_writes = []
+
+    monkeypatch.setattr(
+        "auth.google_auth.create_oauth_flow",
+        lambda **kwargs: _DummyFlow(callback_credentials),  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_oauth21_session_store", lambda: oauth_store
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_credential_store", lambda: credential_store
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_user_info",
+        lambda credentials: {"email": "user@gmail.com"},  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.save_credentials_to_session",
+        lambda *args: session_cache_writes.append(args),
+    )
+    monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
+
+    await handle_auth_callback(
+        scopes=["scope.a"],
+        authorization_response="http://localhost/callback?state=abc123&code=code123",
+        redirect_uri="http://localhost/callback",
+        session_id=None,
+    )
+
+    # Credentials are persisted to the session store bound to the originating
+    # MCP session, not None.
+    assert oauth_store.store_calls == 1
+    assert oauth_store.store_kwargs[-1]["mcp_session_id"] == "originating-mcp-session"
+    # And the session cache is primed under the same id for the next tool call.
+    assert session_cache_writes == [("originating-mcp-session", callback_credentials)]
