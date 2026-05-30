@@ -26,7 +26,11 @@ def _load_startup_dependencies():
         is_stateless_mode,
         is_service_account_enabled,
     )
-    from core.log_formatter import EnhancedLogFormatter, configure_file_logging
+    from core.log_formatter import (
+        EnhancedLogFormatter,
+        configure_file_logging,
+        install_noisy_log_filters,
+    )
     from core.utils import check_credentials_directory_permissions
     from core.server import server, set_transport_mode, configure_server_for_http
     from core.tool_tier_loader import resolve_tools_from_tier
@@ -45,6 +49,7 @@ def _load_startup_dependencies():
         is_service_account_enabled,
         EnhancedLogFormatter,
         configure_file_logging,
+        install_noisy_log_filters,
         check_credentials_directory_permissions,
         server,
         set_transport_mode,
@@ -65,6 +70,7 @@ def _load_startup_dependencies():
     is_service_account_enabled,
     EnhancedLogFormatter,
     configure_file_logging,
+    install_noisy_log_filters,
     check_credentials_directory_permissions,
     server,
     set_transport_mode,
@@ -93,6 +99,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+install_noisy_log_filters()
 configure_file_logging()
 
 
