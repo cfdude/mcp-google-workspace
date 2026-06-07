@@ -9,9 +9,12 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+import pytest
+
 from gcontacts.contacts_tools import (
     _format_contact,
     _build_person_body,
+    _parse_birthday,
 )
 
 
@@ -347,3 +350,51 @@ class TestConstants:
         assert "name" in CONTACT_GROUP_FIELDS
         assert "groupType" in CONTACT_GROUP_FIELDS
         assert "memberCount" in CONTACT_GROUP_FIELDS
+
+
+class TestParseBirthday:
+    """Tests for _parse_birthday helper."""
+
+    def test_full_date(self):
+        result = _parse_birthday("1990-03-15")
+        assert result == {"date": {"year": 1990, "month": 3, "day": 15}}
+
+    def test_year_less_date(self):
+        result = _parse_birthday("03-15")
+        assert result == {"date": {"month": 3, "day": 15}}
+
+    def test_strips_whitespace(self):
+        result = _parse_birthday("  1985-12-01  ")
+        assert result == {"date": {"year": 1985, "month": 12, "day": 1}}
+
+    def test_invalid_format_raises(self):
+        with pytest.raises(ValueError, match="Invalid birthday format"):
+            _parse_birthday("15/03/1990")
+
+    def test_single_part_raises(self):
+        with pytest.raises(ValueError):
+            _parse_birthday("1990")
+
+
+class TestBuildPersonBodyBirthday:
+    """Tests for birthday support in _build_person_body."""
+
+    def test_set_full_birthday(self):
+        body = _build_person_body(given_name="Test", birthday="1990-03-15")
+        assert body["birthdays"] == [{"date": {"year": 1990, "month": 3, "day": 15}}]
+
+    def test_set_yearless_birthday(self):
+        body = _build_person_body(given_name="Test", birthday="03-15")
+        assert body["birthdays"] == [{"date": {"month": 3, "day": 15}}]
+
+    def test_clear_birthday_sentinel(self):
+        body = _build_person_body(given_name="Test", birthday="clear")
+        assert body["birthdays"] == []
+
+    def test_clear_birthday_empty_string(self):
+        body = _build_person_body(given_name="Test", birthday="")
+        assert body["birthdays"] == []
+
+    def test_no_birthday_param_omits_key(self):
+        body = _build_person_body(given_name="Test")
+        assert "birthdays" not in body

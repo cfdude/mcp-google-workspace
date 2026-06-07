@@ -184,6 +184,7 @@ class ContactInput(BaseModel):
     relations: Optional[List[RelationInput]] = None
     notes: Optional[str] = None
     address: Optional[str] = None
+    birthday: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     organization: Optional[str] = None
@@ -266,6 +267,16 @@ def _coerce_contact_update_input(update: Any) -> ContactUpdateInput:
     if isinstance(update, ContactUpdateInput):
         return update
     return ContactUpdateInput.model_validate(update)
+
+
+def _parse_birthday(s: str) -> Dict[str, Any]:
+    """Parse 'YYYY-MM-DD' or 'MM-DD' into a People API birthday object."""
+    parts = s.strip().split("-")
+    if len(parts) == 3:
+        return {"date": {"year": int(parts[0]), "month": int(parts[1]), "day": int(parts[2])}}
+    if len(parts) == 2:
+        return {"date": {"month": int(parts[0]), "day": int(parts[1])}}
+    raise ValueError(f"Invalid birthday format '{s}'. Use 'YYYY-MM-DD' or 'MM-DD'.")
 
 
 def _normalize_phone(value: str) -> str:
@@ -492,6 +503,7 @@ def _build_person_body(
     relations: Optional[List[RelationInput]] = None,
     notes: Optional[str] = None,
     address: Optional[str] = None,
+    birthday: Optional[str] = None,
     # Deprecated single-value aliases
     email: Optional[str] = None,
     phone: Optional[str] = None,
@@ -514,6 +526,7 @@ def _build_person_body(
         organizations: List of OrganizationInput items {name?, title?, department?, jobDescription?, type?}.
         notes: Additional notes/biography.
         address: Street address.
+        birthday: Birthday as 'YYYY-MM-DD', 'MM-DD' (no year), or 'clear'/'' to remove.
         email: [DEPRECATED] Single email address. Use emails instead.
         phone: [DEPRECATED] Single phone number. Use phones instead.
         organization: [DEPRECATED] Company/organization name. Use organizations instead.
@@ -711,6 +724,12 @@ def _build_person_body(
 
     if address:
         body["addresses"] = [{"formattedValue": address}]
+
+    if birthday is not None:
+        if birthday.strip().lower() in ("clear", ""):
+            body["birthdays"] = []
+        else:
+            body["birthdays"] = [_parse_birthday(birthday)]
 
     return body
 
@@ -1219,6 +1238,7 @@ async def manage_contact(
     relations: Optional[List[RelationInput]] = None,
     notes: Optional[str] = None,
     address: Optional[str] = None,
+    birthday: Optional[str] = None,
     # Merge modes for update action
     phones_mode: Literal["merge", "replace", "remove"] = "merge",
     emails_mode: Literal["merge", "replace", "remove"] = "merge",
@@ -1261,6 +1281,7 @@ async def manage_contact(
             Supported types: spouse, child, parent, friend, manager, assistant, etc.
         notes (Optional[str]): Additional notes (for create/update).
         address (Optional[str]): Street address (for create/update).
+        birthday (Optional[str]): Birthday as 'YYYY-MM-DD', 'MM-DD' (no year), or 'clear'/'' to remove.
         phones_mode (str): How to update phones on "update": "merge" (default), "replace", or "remove".
             merge = read-modify-write with dedup by canonicalForm/normalized value.
             replace = overwrite all phones with provided list.
@@ -1318,6 +1339,7 @@ async def manage_contact(
             relations=relations,
             notes=notes,
             address=address,
+            birthday=birthday,
             phone=phone,
             email=email,
             organization=organization,
@@ -1380,6 +1402,7 @@ async def manage_contact(
                 relations=relations,
                 notes=notes,
                 address=address,
+                birthday=birthday,
                 phone=phone,
                 email=email,
                 organization=organization,
@@ -1466,6 +1489,8 @@ async def manage_contact(
                 update_person_fields.append("biographies")
             if "addresses" in merged_body:
                 update_person_fields.append("addresses")
+            if "birthdays" in merged_body:
+                update_person_fields.append("birthdays")
 
             try:
                 result = await asyncio.to_thread(
@@ -1687,6 +1712,7 @@ async def manage_contacts_batch(
             "relations",
             "biographies",
             "addresses",
+            "birthdays",
         ]
     ] = None,
 ) -> str:
@@ -1706,7 +1732,7 @@ async def manage_contacts_batch(
         field (str): For "update" action — the single People API field to update across
             all contacts in this batch. Required. Must be one of: names, phoneNumbers,
             emailAddresses, organizations, nicknames, urls, userDefined, relations,
-            biographies, addresses. Using a single field per batch call prevents
+            biographies, addresses, birthdays. Using a single field per batch call prevents
             unintentional data loss from a union updateMask overwriting unrelated fields.
 
     Returns:
@@ -1748,6 +1774,7 @@ async def manage_contacts_batch(
                 relations=contact.relations,
                 notes=contact.notes,
                 address=contact.address,
+                birthday=contact.birthday,
                 # deprecated aliases
                 phone=contact.phone,
                 email=contact.email,
@@ -1802,12 +1829,13 @@ async def manage_contacts_batch(
             "relations",
             "biographies",
             "addresses",
+            "birthdays",
         }
         if not field:
             raise UserInputError(
                 "field parameter is required for batch 'update' action. "
                 "Must be one of: names, phoneNumbers, emailAddresses, organizations, "
-                "nicknames, urls, userDefined, relations, biographies, addresses. "
+                "nicknames, urls, userDefined, relations, biographies, addresses, birthdays. "
                 "Use a single field per batch call to avoid unintentional data loss "
                 "from a union updateMask."
             )
@@ -1855,6 +1883,7 @@ async def manage_contacts_batch(
             "relations": "relations",
             "biographies": "biographies",
             "addresses": "addresses",
+            "birthdays": "birthdays",
         }
         body_key = field_to_body_key[field]
 
@@ -1883,6 +1912,7 @@ async def manage_contacts_batch(
                 relations=update.relations,
                 notes=update.notes,
                 address=update.address,
+                birthday=update.birthday,
                 # deprecated aliases
                 phone=update.phone,
                 email=update.email,
