@@ -14,12 +14,15 @@ from typing import Annotated, Any, List, Optional
 from pydantic import BeforeValidator
 from defusedxml import ElementTree as ET
 
+from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
 from .api_enablement import get_api_enablement_message
 from auth.google_auth import GoogleAuthenticationError
 from auth.oauth_config import is_oauth21_enabled, is_external_oauth21_provider
 
 logger = logging.getLogger(__name__)
+
+GOOGLE_API_WRITE_RETRIES = 3
 
 
 class TransientNetworkError(Exception):
@@ -71,6 +74,10 @@ DictList = Annotated[List[dict[str, Any]], BeforeValidator(_coerce_json_str_to_l
 Use in tool signatures instead of ``List[dict]`` to work around MCP clients
 that send ``'[{"key":"val"}]'`` instead of ``[{"key":"val"}]``.
 """
+
+
+ObjectList = Annotated[List[object], BeforeValidator(_coerce_json_str_to_list)]
+"""``List[object]`` that also accepts a JSON-encoded string of an array."""
 
 
 def _coerce_json_str_to_dict(v: Any) -> Any:
@@ -608,6 +615,9 @@ def handle_http_errors(
                     raise Exception(message) from error
                 except TransientNetworkError:
                     # Re-raise without wrapping to preserve the specific error type
+                    raise
+                except ToolError:
+                    # Re-raise explicit tool errors so FastMCP can surface them directly.
                     raise
                 except GoogleAuthenticationError:
                     # Re-raise authentication errors without wrapping
