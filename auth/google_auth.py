@@ -20,7 +20,7 @@ from googleapiclient.errors import HttpError
 from auth.scopes import SCOPES, get_current_scopes, has_required_scopes  # noqa
 from auth.oauth21_session_store import get_oauth21_session_store
 from auth.credential_store import get_credential_store
-from auth.oauth_config import get_oauth_config, is_oauth21_enabled, is_stateless_mode
+from auth.oauth_config import is_oauth21_enabled, is_stateless_mode
 from core.config import (
     get_transport_mode,
     get_oauth_redirect_uri,
@@ -1315,23 +1315,18 @@ async def get_authenticated_google_service(
         )
 
         redirect_uri = get_oauth_redirect_uri()
-        transport_mode = get_transport_mode()
-        if transport_mode == "stdio":
-            # Only stdio legacy OAuth depends on the standalone callback server.
-            from auth.oauth_callback_server import ensure_oauth_callback_available
+        # Only stdio legacy OAuth depends on the standalone callback server; the
+        # helper no-ops in other transports and binds the port lazily (#832).
+        from auth.oauth_callback_server import ensure_stdio_oauth_callback_available
 
-            config = get_oauth_config()
-            success, error_msg = await asyncio.to_thread(
-                ensure_oauth_callback_available,
-                transport_mode,
-                config.port,
-                config.base_uri,
+        success, error_msg = await asyncio.to_thread(
+            ensure_stdio_oauth_callback_available
+        )
+        if not success:
+            error_detail = f" ({error_msg})" if error_msg else ""
+            raise GoogleAuthenticationError(
+                f"Cannot initiate OAuth flow - callback server unavailable{error_detail}"
             )
-            if not success:
-                error_detail = f" ({error_msg})" if error_msg else ""
-                raise GoogleAuthenticationError(
-                    f"Cannot initiate OAuth flow - callback server unavailable{error_detail}"
-                )
 
         # Generate auth URL and raise exception with it
         auth_response = await start_auth_flow(
