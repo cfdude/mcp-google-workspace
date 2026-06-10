@@ -7,6 +7,7 @@ operate purely on plain dicts/strings and are kept separate from the MCP
 tool definitions and Pydantic input models in contacts_tools.py.
 """
 
+import datetime
 import logging
 import re
 from typing import Any, Dict, List
@@ -33,6 +34,14 @@ def _parse_birthday(s: str) -> Dict[str, Any]:
         raise ValueError(
             f"Invalid birthday '{s}': month must be 1-12 and day must be 1-31."
         )
+
+    # Reject impossible day/month combinations (e.g. Feb 30, Apr 31) and bad
+    # years before they reach the People API. For year-less dates use a leap
+    # year (2000) so Feb 29 is accepted.
+    try:
+        datetime.date(year if year is not None else 2000, month, day)
+    except ValueError:
+        raise ValueError(f"Invalid birthday '{s}': not a real calendar date.") from None
 
     date = {"month": month, "day": day}
     if year is not None:

@@ -194,7 +194,10 @@ class ContactInput(BaseModel):
     relations: Optional[List[RelationInput]] = None
     notes: Optional[str] = None
     address: Optional[str] = None
-    birthday: Optional[str] = None
+    birthday: Optional[str] = Field(
+        default=None,
+        description="Birthday as 'YYYY-MM-DD', 'MM-DD' (no year), or 'clear'/'' to remove.",
+    )
     phone: Optional[str] = None
     email: Optional[str] = None
     organization: Optional[str] = None

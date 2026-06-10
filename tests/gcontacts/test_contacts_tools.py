@@ -400,6 +400,31 @@ class TestParseBirthday:
         with pytest.raises(ValueError, match="Invalid birthday format"):
             _parse_birthday("")
 
+    def test_impossible_day_month_combo_raises(self):
+        """A well-formed but non-existent date (Feb 30) raises a calendar ValueError."""
+        with pytest.raises(ValueError, match="not a real calendar date"):
+            _parse_birthday("2000-02-30")
+
+    def test_feb_29_non_leap_year_raises(self):
+        """Feb 29 in a non-leap year is rejected."""
+        with pytest.raises(ValueError, match="not a real calendar date"):
+            _parse_birthday("1990-02-29")
+
+    def test_feb_29_leap_year_allowed(self):
+        """Feb 29 in a leap year is a valid full date."""
+        assert _parse_birthday("2000-02-29") == {
+            "date": {"year": 2000, "month": 2, "day": 29}
+        }
+
+    def test_yearless_feb_29_allowed(self):
+        """Year-less Feb 29 is valid (validated against a leap year)."""
+        assert _parse_birthday("02-29") == {"date": {"month": 2, "day": 29}}
+
+    def test_year_zero_raises(self):
+        """A non-positive year is not a real calendar date."""
+        with pytest.raises(ValueError, match="not a real calendar date"):
+            _parse_birthday("0000-05-15")
+
 
 class TestBuildPersonBodyBirthday:
     """Tests for birthday support in _build_person_body."""

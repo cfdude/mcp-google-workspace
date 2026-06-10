@@ -595,7 +595,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "description": "Birthday as 'YYYY-MM-DD', 'MM-DD' (no year), or 'clear'/'' to remove."
           },
           "email": {
             "anyOf": [
@@ -799,7 +800,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "description": "Birthday as 'YYYY-MM-DD', 'MM-DD' (no year), or 'clear'/'' to remove."
           },
           "contact_id": {
             "description": "Contact ID like \"c123\" or full resource name like \"people/c123\".",
