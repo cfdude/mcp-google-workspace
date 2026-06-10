@@ -273,7 +273,13 @@ def _parse_birthday(s: str) -> Dict[str, Any]:
     """Parse 'YYYY-MM-DD' or 'MM-DD' into a People API birthday object."""
     parts = s.strip().split("-")
     if len(parts) == 3:
-        return {"date": {"year": int(parts[0]), "month": int(parts[1]), "day": int(parts[2])}}
+        return {
+            "date": {
+                "year": int(parts[0]),
+                "month": int(parts[1]),
+                "day": int(parts[2]),
+            }
+        }
     if len(parts) == 2:
         return {"date": {"month": int(parts[0]), "day": int(parts[1])}}
     raise ValueError(f"Invalid birthday format '{s}'. Use 'YYYY-MM-DD' or 'MM-DD'.")
