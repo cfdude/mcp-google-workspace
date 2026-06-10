@@ -14,8 +14,8 @@ import pytest
 from gcontacts.contacts_tools import (
     _format_contact,
     _build_person_body,
-    _parse_birthday,
 )
+from gcontacts.contacts_helpers import _parse_birthday
 
 
 class TestFormatContact:
@@ -379,6 +379,26 @@ class TestParseBirthday:
         """A single-component string (no separator) raises ValueError."""
         with pytest.raises(ValueError):
             _parse_birthday("1990")
+
+    def test_non_numeric_raises_format_error(self):
+        """Non-numeric components raise the friendly format ValueError, not int()'s."""
+        with pytest.raises(ValueError, match="Invalid birthday format"):
+            _parse_birthday("1990-ab-15")
+
+    def test_out_of_range_month_raises(self):
+        """A month outside 1-12 raises a range ValueError."""
+        with pytest.raises(ValueError, match="month must be 1-12"):
+            _parse_birthday("1990-13-15")
+
+    def test_out_of_range_day_raises(self):
+        """A day outside 1-31 raises a range ValueError."""
+        with pytest.raises(ValueError, match="day must be 1-31"):
+            _parse_birthday("03-45")
+
+    def test_empty_string_raises(self):
+        """An empty string has no numeric parts and raises the format ValueError."""
+        with pytest.raises(ValueError, match="Invalid birthday format"):
+            _parse_birthday("")
 
 
 class TestBuildPersonBodyBirthday:
