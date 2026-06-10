@@ -6,7 +6,7 @@ import logging
 import os
 from typing import List, Optional
 from importlib import metadata
-from urllib.parse import urlparse
+from urllib.parse import urlparse, ParseResult
 
 from core.warning_filters import install_startup_warning_filters
 
@@ -57,8 +57,10 @@ session_middleware = Middleware(MCPSessionMiddleware)
 TRUSTED_ORIGIN_SCHEMES = frozenset({"vscode-webview"})
 
 
-def _normalize_origin(origin: str) -> Optional[str]:
-    parsed = urlparse(origin)
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _normalize_parsed(parsed: ParseResult) -> Optional[str]:
     if not parsed.scheme:
         return None
     if not parsed.hostname:
@@ -72,9 +74,8 @@ def _normalize_origin(origin: str) -> Optional[str]:
     return f"{parsed.scheme}://{netloc}"
 
 
-def _is_loopback_origin(origin: str) -> bool:
-    parsed = urlparse(origin)
-    return parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+def _normalize_origin(origin: str) -> Optional[str]:
+    return _normalize_parsed(urlparse(origin))
 
 
 def _get_allowed_http_origins() -> set[str]:
@@ -94,11 +95,12 @@ def _get_allowed_http_origins() -> set[str]:
 
 
 def _is_origin_allowed(origin: str) -> bool:
-    if urlparse(origin).scheme in TRUSTED_ORIGIN_SCHEMES:
+    parsed = urlparse(origin)
+    if parsed.scheme in TRUSTED_ORIGIN_SCHEMES:
         return True
-    if _is_loopback_origin(origin):
+    if parsed.hostname in _LOOPBACK_HOSTS:
         return True
-    normalized = _normalize_origin(origin)
+    normalized = _normalize_parsed(parsed)
     if not normalized:
         return False
     return normalized in _get_allowed_http_origins()
@@ -787,22 +789,16 @@ async def start_google_auth(
         return f"**Authentication Error:** {error_message}"
 
     try:
-        transport_mode = get_transport_mode()
-        if transport_mode == "stdio":
-            # Only stdio legacy OAuth depends on the standalone callback server.
-            from auth.oauth_callback_server import ensure_oauth_callback_available
-            from auth.oauth_config import get_oauth_config
+        # Only stdio legacy OAuth depends on the standalone callback server; the
+        # helper no-ops in other transports and binds the port lazily (#832).
+        from auth.oauth_callback_server import ensure_stdio_oauth_callback_available
 
-            config = get_oauth_config()
-            success, error_msg = await asyncio.to_thread(
-                ensure_oauth_callback_available,
-                transport_mode,
-                config.port,
-                config.base_uri,
-            )
-            if not success:
-                error_detail = f" ({error_msg})" if error_msg else ""
-                return f"**Error:** Cannot initiate OAuth flow - callback server unavailable{error_detail}"
+        success, error_msg = await asyncio.to_thread(
+            ensure_stdio_oauth_callback_available
+        )
+        if not success:
+            error_detail = f" ({error_msg})" if error_msg else ""
+            return f"**Error:** Cannot initiate OAuth flow - callback server unavailable{error_detail}"
 
         auth_message = await start_auth_flow(
             user_google_email=user_google_email,
