@@ -50,7 +50,9 @@ async def test_start_google_auth_preflights_in_stdio(monkeypatch):
 
     monkeypatch.setattr("core.server.is_oauth21_enabled", lambda: False)
     monkeypatch.setattr("core.server.check_client_secrets", lambda: None)
-    monkeypatch.setattr("auth.oauth_callback_server.get_transport_mode", lambda: "stdio")
+    monkeypatch.setattr(
+        "auth.oauth_callback_server.get_transport_mode", lambda: "stdio"
+    )
     monkeypatch.setattr("core.server.asyncio.to_thread", fake_to_thread)
     monkeypatch.setattr(
         "core.server.get_oauth_redirect_uri_for_current_mode",
