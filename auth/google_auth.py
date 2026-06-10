@@ -89,13 +89,7 @@ DEFAULT_CREDENTIALS_DIR = get_default_credentials_dir()
 def _build_authorized_http(
     credentials: Credentials, timeout: int = 30
 ) -> google_auth_httplib2.AuthorizedHttp:
-    """Return an httplib2.Http wrapped with credentials and a socket timeout.
-
-    Issue #835: googleapiclient.discovery.build() with credentials=credentials
-    creates an httplib2.Http() with no timeout (default None), causing
-    indefinite hangs on stalled TCP. We explicitly construct an
-    AuthorizedHttp with a timeout and pass it as the *http* argument.
-    """
+    """Return credentialed HTTP with an explicit socket timeout."""
     http = httplib2.Http(timeout=timeout)
     return google_auth_httplib2.AuthorizedHttp(credentials, http=http)
 
