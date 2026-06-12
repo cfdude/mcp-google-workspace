@@ -102,3 +102,22 @@ Caddyfile
 ecosystem.config.cjs
 fastmcp_server.py
 fastmcp.json
+
+# ---- Upstream artifacts not needed by Claude Desktop runtime ----------------
+.claude-plugin/
+.claude-plugin/**
+.python-version
+Dockerfile
+docker-compose.yml
+smithery.yaml
+glama.json
+renovate.json
+server.json
+README_NEW.md
+README.md
+SECURITY.md
+LICENSE
+skills/
+skills/**
+.dockerignore
+uv.lock
