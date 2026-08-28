@@ -96,6 +96,7 @@ certs/**
 manifest.highway.json
 manifest.json.bak
 build-highway-dxt.sh
+build-highway-mcpb.sh
 *.dxt
 *.mcpb
 Caddyfile

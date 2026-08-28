@@ -5,6 +5,7 @@ Caddyfile
 logs/
 manifest.highway.json
 build-highway-dxt.sh
+build-highway-mcpb.sh
 *.dxt
 
 # ---- Python artefacts --------------------------------------------------
