@@ -184,7 +184,6 @@ class TestBatchManagerIntegration:
                 "update_table_column_properties",
             )
 
-
     def test_supported_operations_include_update_table_column_properties(self, manager):
         supported = manager.get_supported_operations()["supported_operations"]
         assert "update_table_column_properties" in supported

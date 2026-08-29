@@ -824,7 +824,6 @@ class BatchOperationManager:
                     "update_table_column_properties requires at least one of: width, width_type"
                 )
 
-
             description = (
                 f"update column properties for columns {op['column_indices']} "
                 f"in table at {op['table_start_index']}"

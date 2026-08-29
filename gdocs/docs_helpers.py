@@ -1764,7 +1764,6 @@ def create_update_table_column_properties_request(
     if not fields:
         return None
 
-
     return {
         "updateTableColumnProperties": {
             "tableStartLocation": location,

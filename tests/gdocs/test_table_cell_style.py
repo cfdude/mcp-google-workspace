@@ -209,7 +209,6 @@ class TestValidateTableCellStylePaddingAndAlignment:
         assert not is_valid
         assert "must be a number" in msg
 
-
     def test_no_style_params_rejected(self, vm):
         is_valid, msg = vm.validate_table_cell_style_params()
         assert not is_valid
