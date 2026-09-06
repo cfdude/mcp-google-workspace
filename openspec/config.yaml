@@ -1,0 +1,69 @@
+schema: spec-driven
+
+context: |
+  A FORK of taylorwilsdon/google_workspace_mcp (upstream remote `upstream`,
+  our remote `origin` = cfdude/mcp-google-workspace). Work lands on `dev`.
+  Keep divergence from upstream as small as possible: prefer contributing a fix
+  upstream over carrying it locally, and expect to re-sync `dev` to
+  upstream/main regularly.
+
+  Stack: Python >=3.11, uv, pytest, ruff. CI pins **ruff 0.15.22** deliberately
+  (.github/workflows/ruff.yml) -- newer ruff expands the default rule set and
+  reports thousands of findings against upstream's own clean tree. Verify with
+  `uvx ruff@0.15.22 check . && uvx ruff@0.15.22 format --check . && uv run pytest`.
+
+  Upstream CONTRIBUTING constraints that shape design here:
+    - "Extending existing tools is strongly preferred over adding new ones" --
+      they are near the max tool count for the OpenAI-compatible tools payload,
+      so PRs adding new tools will almost never be merged.
+    - Each Google service is its own package with a strict split:
+      <svc>/<svc>_tools.py = tool definitions only, <svc>/<svc>_helpers.py =
+      all business logic and API calls.
+    - Fork PRs must pass ruff and pytest on their own and enable
+      "Allow edits from maintainers".
+
+  This server runs three ways at once, and code must not assume a single
+  instance: a Claude Desktop stdio extension (Claude Desktop launches TWO
+  copies -- the main app plus one for Cowork/Code sessions), a PM2
+  streamable-http instance on port 8104, and ad-hoc CLI runs. Two real bugs
+  have come from single-instance assumptions made fatal (an OAuth callback
+  port probe and a fixed-name credentials permission probe). Shared-resource
+  probes must be per-process and non-fatal.
+
+  Distribution: a .mcpb bundle for Claude Desktop for Teams, built by the
+  local-only ~/Servers/mcp-google-workspace/build-highway-mcpb.sh from
+  manifest.highway.json (both gitignored; the manifest carries live OAuth
+  credentials and must never be committed). Manifest constraints that are
+  load-bearing: server.type "python", command "uv", every user_config field
+  type "string" and required:false with a default.
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
