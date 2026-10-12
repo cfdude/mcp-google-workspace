@@ -860,7 +860,7 @@ class ValidationManager:
         Args:
             background_color: Cell background color in "#RRGGBB" format
             border_color: Border color in "#RRGGBB" format
-            border_width: Border width in points
+            border_width: Border width in points (non-negative; 0 hides the border)
             padding_top: Top padding in points (non-negative)
             padding_bottom: Bottom padding in points (non-negative)
             padding_left: Left padding in points (non-negative)
@@ -919,8 +919,8 @@ class ValidationManager:
                     False,
                     f"border_width must be a number, got {type(border_width).__name__}",
                 )
-            if border_width <= 0:
-                return False, f"border_width must be positive, got {border_width}"
+            if border_width < 0:
+                return False, f"border_width must be non-negative, got {border_width}"
 
         for padding_value, padding_name in (
             (padding_top, "padding_top"),
