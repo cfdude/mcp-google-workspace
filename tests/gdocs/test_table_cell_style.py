@@ -264,6 +264,17 @@ class TestBatchManagerIntegration:
                 "update_table_cell_style",
             )
 
+    def test_build_request_rejects_boolean_border_width(self, manager):
+        with pytest.raises(ValueError, match="border_width must be a number"):
+            manager._build_operation_request(
+                {
+                    "type": "update_table_cell_style",
+                    "table_start_index": 42,
+                    "border_width": False,
+                },
+                "update_table_cell_style",
+            )
+
     def test_border_edges_are_in_description(self, manager):
         _, desc = manager._build_operation_request(
             {

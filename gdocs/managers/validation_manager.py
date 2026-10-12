@@ -914,7 +914,9 @@ class ValidationManager:
             return False, error_msg
 
         if border_width is not None:
-            if not isinstance(border_width, (int, float)):
+            if isinstance(border_width, bool) or not isinstance(
+                border_width, (int, float)
+            ):
                 return (
                     False,
                     f"border_width must be a number, got {type(border_width).__name__}",
