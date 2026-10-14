@@ -385,7 +385,7 @@ async def list_calendars(
         page_token (Optional[str]): Token for the next page, taken from a previous response.
 
     Returns:
-        str: A formatted list of the user's calendars (summary, ID, primary status).
+        str: A formatted list of the user's calendars (summary, ID, primary status, time zone).
             When more calendars remain, a "Next page token" line is appended.
     """
     logger.info(f"[list_calendars] Invoked. Email: '{user_google_email}'")
@@ -409,10 +409,12 @@ async def list_calendars(
             )
         return f"No calendars found for {user_google_email}."
 
-    calendars_summary_list = [
-        f'- "{cal.get("summary", "No Summary")}"{" (Primary)" if cal.get("primary") else ""} (ID: {cal["id"]})'
-        for cal in items
-    ]
+    calendars_summary_list = []
+    for cal in items:
+        line = f'- "{cal.get("summary", "No Summary")}"{" (Primary)" if cal.get("primary") else ""} (ID: {cal["id"]})'
+        if cal.get("timeZone"):
+            line += f" (Time zone: {cal['timeZone']})"
+        calendars_summary_list.append(line)
     text_output = (
         f"Successfully listed {len(items)} calendars for {user_google_email}:\n"
         + "\n".join(calendars_summary_list)
