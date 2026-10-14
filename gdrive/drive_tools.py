@@ -448,7 +448,7 @@ async def get_drive_file_content(
 @server.tool(
     title="Get Drive File Download URL",
     annotations=ToolAnnotations(
-        readOnlyHint=True,
+        readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=True,
