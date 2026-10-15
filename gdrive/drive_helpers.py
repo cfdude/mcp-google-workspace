@@ -30,6 +30,7 @@ from auth.service_decorator import require_google_service
 from core.file_limits import download_media_bytes
 from core.http_utils import (
     redact_url as _redact_url,
+    PrivateHostError,
     ssrf_safe_stream as _ssrf_safe_stream,
 )
 from core.utils import (
@@ -893,6 +894,21 @@ def upload_url_not_offered_error(routes: tuple[str, ...]) -> UserInputError:
     )
 
 
+def upload_url_hint(type_param: str = "mime_type") -> str:
+    """Pointer to ``return_upload_url`` for refusals a caller can sidestep with it.
+
+    Append only where local file access is disabled and the calling tool offers
+    ``return_upload_url``. ``type_param`` is that tool's parameter for the type
+    of the bytes: ``mime_type``, or ``source_format`` for the import tools.
+    """
+    return (
+        "If the file is on the caller's machine, call this tool again with "
+        f"return_upload_url=true and {type_param}, then PUT the bytes to the URL it "
+        "returns (suited to large or binary files; only offered where local file "
+        "access is disabled)."
+    )
+
+
 def resumable_upload_result(summary: str, upload_url: str, mime_type: str) -> str:
     return (
         f"{summary}\n\n"
@@ -907,9 +923,26 @@ def resumable_upload_result(summary: str, upload_url: str, mime_type: str) -> st
 
 
 async def _stream_url_with_validation(
-    url: str, write_chunk: Optional[Callable[[bytes], Awaitable[None]]] = None
+    url: str,
+    write_chunk: Optional[Callable[[bytes], Awaitable[None]]] = None,
+    *,
+    upload_type_param: str,
 ) -> Tuple[int, Optional[str]]:
-    """Stream a remote file with shared status and size validation."""
+    """Stream a remote file with shared status and size validation.
+
+    ``upload_type_param``: the calling tool's type parameter, for the hint."""
+    try:
+        return await _stream_url(url, write_chunk)
+    except PrivateHostError as exc:
+        if local_file_access_enabled():
+            raise
+        # Same message, plus the way round it; every caller offers return_upload_url.
+        raise ValueError(f"{exc}. {upload_url_hint(upload_type_param)}") from exc
+
+
+async def _stream_url(
+    url: str, write_chunk: Optional[Callable[[bytes], Awaitable[None]]]
+) -> Tuple[int, Optional[str]]:
     total_bytes = 0
     redacted_url = _redact_url(url)
 
@@ -939,7 +972,9 @@ async def _stream_url_with_validation(
     return total_bytes, content_type
 
 
-async def _download_url_to_bytes(url: str) -> Tuple[BinaryIO, Optional[str]]:
+async def _download_url_to_bytes(
+    url: str, *, upload_type_param: str
+) -> Tuple[BinaryIO, Optional[str]]:
     """Download a remote file into a spooled temporary file with bounded streaming."""
     spool = SpooledTemporaryFile(max_size=UPLOAD_CHUNK_SIZE_BYTES)
     try:
@@ -947,7 +982,9 @@ async def _download_url_to_bytes(url: str) -> Tuple[BinaryIO, Optional[str]]:
         async def _collect(chunk: bytes) -> None:
             await asyncio.to_thread(spool.write, chunk)
 
-        _total_bytes, content_type = await _stream_url_with_validation(url, _collect)
+        _total_bytes, content_type = await _stream_url_with_validation(
+            url, _collect, upload_type_param=upload_type_param
+        )
         await asyncio.to_thread(spool.seek, 0)
         return spool, content_type
     except Exception:
@@ -1125,6 +1162,7 @@ async def _resolve_import_media(
     base64_sha256: Optional[str] = None,
     format_map: Optional[Dict[str, str]] = None,
     passthrough_mime_type: Optional[str] = None,
+    upload_type_param: str,
 ) -> Tuple[MediaIoBaseUpload, str, Optional[BinaryIO]]:
     """
     Resolve a content source into an upload ``MediaIoBaseUpload`` and source MIME type.
@@ -1141,6 +1179,8 @@ async def _resolve_import_media(
 
     Returns ``(media, source_mime_type, closeable)``; when the source is a remote URL,
     ``closeable`` is the download stream the caller must close after upload (else None).
+    ``upload_type_param`` is the calling tool's type parameter, named by the
+    return_upload_url hint on a private-host refusal.
     """
     # Name file_path only where the tool schema advertises it.
     path_source = "'file_path', " if local_file_access_enabled() else ""
@@ -1239,7 +1279,9 @@ async def _resolve_import_media(
         if parsed_url.scheme not in ("http", "https"):
             raise ValueError(f"file_url must be http:// or https://, got: {file_url}")
 
-        remote_file_data, remote_content_type = await _download_url_to_bytes(file_url)
+        remote_file_data, remote_content_type = await _download_url_to_bytes(
+            file_url, upload_type_param=upload_type_param
+        )
 
         # Prefer the response Content-Type, falling back to URL-based detection.
         if not source_format and not passthrough_mime_type:
@@ -1534,6 +1576,7 @@ async def _import_with_conversion(
         base64_content=base64_content,
         base64_sha256=base64_sha256,
         format_map=format_map,
+        upload_type_param="source_format",
     )
 
     # Clean up file name (remove extension since it becomes a Google Apps file)

@@ -40,6 +40,7 @@ from core.utils import (
     GOOGLE_API_WRITE_RETRIES,
     IMAGE_MIME_TYPES,
     hide_local_file_args,
+    UserInputError,
     hide_remote_only_args,
     local_file_access_enabled,
     encode_image_content,
@@ -93,6 +94,7 @@ from gdrive.drive_helpers import (
     resolve_file_type_mime,
     resolve_folder_id,
     resumable_upload_result,
+    upload_url_hint,
     upload_url_not_offered_error,
     validate_expiration_time,
     validate_share_role,
@@ -1067,6 +1069,14 @@ async def create_drive_file(
                     "[create_drive_file] file:// URL requested while server runs in streamable-http mode. Ensure the file path is accessible to the server (e.g., Docker volume) or use an HTTP(S) URL."
                 )
 
+            if not local_file_access_enabled():
+                raise UserInputError(
+                    "Local file access is disabled on this server: file paths "
+                    "resolve on the server's filesystem, not the caller's. "
+                    "Provide the file by http(s) URL or as inline content "
+                    f"instead. {upload_url_hint()}"
+                )
+
             # Convert file:// URL to a cross-platform local path
             raw_path = parsed_url.path or ""
             netloc = parsed_url.netloc
@@ -1137,7 +1147,7 @@ async def create_drive_file(
                         await asyncio.to_thread(spool.write, chunk)
 
                     _total, content_type = await _stream_url_with_validation(
-                        fileUrl, _write_spool
+                        fileUrl, _write_spool, upload_type_param="mime_type"
                     )
                     await asyncio.to_thread(spool.seek, 0)
 
@@ -1175,7 +1185,7 @@ async def create_drive_file(
                         await asyncio.to_thread(temp_file.write, chunk)
 
                     total_bytes, content_type = await _stream_url_with_validation(
-                        fileUrl, _write_chunk
+                        fileUrl, _write_chunk, upload_type_param="mime_type"
                     )
 
                     logger.info(
@@ -2118,6 +2128,7 @@ async def update_drive_file(
                     if format_map
                     else (target_mime_type or "application/octet-stream")
                 ),
+                upload_type_param="mime_type",
             )
             query_params["media_body"] = media
 
