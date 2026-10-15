@@ -90,6 +90,30 @@ class TestSaveAttachment:
         assert storage.get_attachment_path(first.file_id) == Path(first.path)
         assert storage.get_attachment_path(second.file_id) == Path(second.path)
 
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "a" * 250 + ".pdf",
+            "\u6587" * 100 + ".pdf",
+            "report." + "x" * 300,
+        ],
+        ids=["long-ascii", "long-multibyte", "long-extension"],
+    )
+    def test_overlong_filename_is_shortened_to_fit_the_filesystem(
+        self, storage, filename
+    ):
+        # Most filesystems cap one name at 255 bytes; the stored name also
+        # carries the file id, so an unshortened long name failed with
+        # "File name too long" and the attachment could not be saved.
+        saved = storage.save_attachment(
+            base64.urlsafe_b64encode(b"data").decode(), filename=filename
+        )
+
+        name = Path(saved.path).name
+        assert len(name.encode("utf-8")) <= 255
+        assert saved.file_id in name
+        assert Path(saved.path).read_bytes() == b"data"
+
     def test_save_attachment_bytes_avoids_base64_round_trip(self, storage):
         payload = bytes(range(256))
 
