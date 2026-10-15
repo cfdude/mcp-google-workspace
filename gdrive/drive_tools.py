@@ -901,6 +901,8 @@ async def create_drive_file(
     """
     Creates a new file in Google Drive, supporting creation within shared drives.
     Accepts direct text content, inline base64 bytes, or a fileUrl to fetch content from.
+    Where local file access is disabled it can instead return an upload URL for the
+    caller to PUT file bytes to.
     This stores the supplied bytes without converting them to Google Docs, Sheets, or
     Slides. Use the matching import_to_google_* tool for Google-native conversion.
 
@@ -910,7 +912,7 @@ async def create_drive_file(
         content (Optional[str]): If provided, the content to write to the file.
         folder_id (str): The ID of the parent folder. Defaults to 'root'. For shared drives, this must be a folder ID within the shared drive.
         mime_type (Optional[str]): The MIME type of the file. Defaults to 'text/plain'; required with return_upload_url.
-        fileUrl (Optional[str]): If provided, fetches the file content from this URL. Supports file://, http://, and https:// protocols.
+        fileUrl (Optional[str]): If provided, fetches the file content from this URL. Supports http:// and https://; file:// only where local file access is enabled. Where it is disabled, files on the caller's machine go through an upload URL instead (see the upload-URL parameter, if offered).
         base64_content (Optional[str]): Standard base64-encoded file bytes.
         content_mime_type (Optional[str]): MIME type for base64_content uploads.
         base64_sha256 (Optional[str]): Expected SHA-256 of decoded base64_content. Recommended for binary payload integrity checks.

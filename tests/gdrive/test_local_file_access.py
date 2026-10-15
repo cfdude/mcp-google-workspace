@@ -455,6 +455,13 @@ class TestUploadUrlHint:
         assert "URLs pointing to localhost are not allowed" in str(exc.value)
         assert "upload" not in str(exc.value).lower()
 
+    def test_file_url_description_does_not_promise_file_scheme_unconditionally(self):
+        doc = inspect.getdoc(_unwrap(create_drive_file))
+        line = next(ln for ln in doc.splitlines() if ln.strip().startswith("fileUrl"))
+        assert "Supports file://, http://, and https://" not in line
+        assert "file:// only where local file access is enabled" in line
+        assert "upload URL" in doc
+
     def test_shared_validate_file_path_text_is_unchanged(self, monkeypatch):
         """Gmail attachments share this text and have no upload-URL route."""
         monkeypatch.setenv("WORKSPACE_MCP_DISABLE_LOCAL_FILES", "true")
