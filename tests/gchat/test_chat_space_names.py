@@ -54,6 +54,16 @@ def _http_error(status):
     return HttpError(httplib2.Response({"status": status}), b"{}")
 
 
+def _scope_error():
+    body = (
+        b'{"error": {"code": 403, "message": "Request had insufficient '
+        b'authentication scopes.", "status": "PERMISSION_DENIED", "details": '
+        b'[{"@type": "type.googleapis.com/google.rpc.ErrorInfo", '
+        b'"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "domain": "googleapis.com"}]}}'
+    )
+    return HttpError(httplib2.Response({"status": 403}), body)
+
+
 def _request(result=None, error=None):
     request = Mock()
     if error is not None:
@@ -331,12 +341,12 @@ async def test_list_spaces_does_not_name_space_after_caller_when_self_id_is_miss
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [403, 429])
-async def test_list_spaces_stops_listing_members_once_forbidden_or_rate_limited(
-    status,
+@pytest.mark.parametrize("error", [_scope_error(), _http_error(429)])
+async def test_list_spaces_stops_listing_members_once_scope_missing_or_rate_limited(
+    error,
 ):
     dms = [{**DM_SPACE, "name": f"spaces/DM{i}"} for i in range(1, 4)]
-    chat_service = _chat_service([*dms, NAMED_SPACE], members_error=_http_error(status))
+    chat_service = _chat_service([*dms, NAMED_SPACE], members_error=error)
 
     result = await _list_spaces(chat_service)
 
@@ -346,7 +356,9 @@ async def test_list_spaces_stops_listing_members_once_forbidden_or_rate_limited(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [_http_error(404), TimeoutError("timed out")])
+@pytest.mark.parametrize(
+    "error", [_http_error(403), _http_error(404), TimeoutError("timed out")]
+)
 async def test_list_spaces_keeps_listing_members_after_space_specific_error(error):
     chat_service = _chat_service(
         [DM_SPACE, DM2_SPACE],

@@ -23,6 +23,7 @@ _UNNAMED_SPACE_FALLBACKS = {
 _SPACE_NAME_MAX_MEMBERS = 3
 _PEOPLE_BATCH_SIZE = 200  # people.getBatchGet limit
 _MAX_CONSECUTIVE_MEMBER_LOOKUP_FAILURES = 2
+_SCOPE_ERROR_REASON = "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
 _SEARCH_MESSAGES_RETRY_BASE_DELAY_SECONDS = 1
 
 
@@ -115,6 +116,22 @@ async def _lookup_people_names(people_service, user_ids: List[str]) -> Dict[str,
     return names
 
 
+def _is_scope_error(error: HttpError) -> bool:
+    """Tell a 403 for a missing OAuth scope from a 403 for one unreadable resource.
+
+    Google APIs answer a missing scope with a google.rpc.ErrorInfo detail whose
+    reason is ACCESS_TOKEN_SCOPE_INSUFFICIENT; googleapiclient parses the body's
+    "details" list into HttpError.error_details. A 403 for a space the caller
+    cannot read carries no such detail (error_details is then the message string).
+    """
+    details = error.error_details
+    if not isinstance(details, list):
+        return False
+    return any(
+        isinstance(d, dict) and d.get("reason") == _SCOPE_ERROR_REASON for d in details
+    )
+
+
 async def _list_memberships(chat_service, space_name: str) -> List[dict]:
     """Return every membership of a space, following nextPageToken."""
     memberships = []
@@ -170,8 +187,9 @@ async def _name_spaces(
             memberships = await _list_memberships(chat_service, space_name)
         except HttpError as e:
             logger.debug(f"Could not list members of {space_name}: {e}")
-            # Missing scope or throttling would fail every remaining space too.
-            if e.resp.status in (403, 429):
+            # A missing scope or throttling would fail every remaining space too;
+            # a 403 for one space the caller cannot read says nothing about the next.
+            if e.resp.status == 429 or (e.resp.status == 403 and _is_scope_error(e)):
                 break
             continue
         except Exception as e:
