@@ -921,6 +921,8 @@ class ValidationManager:
                     False,
                     f"border_width must be a number, got {type(border_width).__name__}",
                 )
+            if not math.isfinite(border_width):
+                return False, f"border_width must be finite, got {border_width}"
             if border_width < 0:
                 return False, f"border_width must be non-negative, got {border_width}"
 

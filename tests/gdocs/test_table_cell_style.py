@@ -275,6 +275,18 @@ class TestBatchManagerIntegration:
                 "update_table_cell_style",
             )
 
+    @pytest.mark.parametrize("width", [float("nan"), float("inf")])
+    def test_build_request_rejects_non_finite_border_width(self, manager, width):
+        with pytest.raises(ValueError, match="border_width must be finite"):
+            manager._build_operation_request(
+                {
+                    "type": "update_table_cell_style",
+                    "table_start_index": 42,
+                    "border_width": width,
+                },
+                "update_table_cell_style",
+            )
+
     def test_border_edges_are_in_description(self, manager):
         _, desc = manager._build_operation_request(
             {
