@@ -88,6 +88,7 @@ from gmail.gmail_helpers import (
     format_filter_apply_result,
     html_newlines_to_br,
     html_to_text_preserving_breaks,
+    send_message_once,
     update_gmail_filter,
 )
 
@@ -2953,10 +2954,7 @@ async def send_gmail_message(
         send_body["threadId"] = thread_id_final
 
     # Send the message
-    sent_message = await asyncio.to_thread(
-        service.users().messages().send(userId="me", body=send_body).execute,
-        num_retries=GOOGLE_API_WRITE_RETRIES,
-    )
+    sent_message = await send_message_once(service, send_body)
     message_id = sent_message.get("id")
 
     if requested_attachment_count > 0:
@@ -3120,10 +3118,7 @@ async def _forward_gmail_message_impl(
         return f"Forward draft created{attachment_info}! Draft ID: {draft_id}"
 
     # Send the message
-    sent_message = await asyncio.to_thread(
-        service.users().messages().send(userId="me", body=send_body).execute,
-        num_retries=GOOGLE_API_WRITE_RETRIES,
-    )
+    sent_message = await send_message_once(service, send_body)
     sent_message_id = sent_message.get("id")
     return f"Email forwarded{attachment_info}! Message ID: {sent_message_id}"
 
