@@ -18,11 +18,12 @@ from googleapiclient.errors import HttpError
 from googleapiclient.discovery import build
 
 from auth.service_decorator import require_google_service
-from core.utils import handle_http_errors, StringList
+from core.utils import handle_http_errors, StringList, StringOrDictList, UserInputError
 from gcalendar.calendar_helpers import (
     _format_event_detail_lines,
     _format_event_time,
     _get_meeting_link,
+    parse_event_boundary,
 )
 
 from mcp.types import ToolAnnotations
@@ -293,31 +294,6 @@ def _correct_time_format_for_api(
     return time_str
 
 
-def _strip_utc_offset(datetime_str: str) -> str:
-    """Strip UTC offset from an RFC3339 dateTime string, returning a naive local time.
-
-    When an IANA timezone (e.g. America/Los_Angeles) is provided alongside a dateTime,
-    the Google Calendar API uses the explicit offset from dateTime for scheduling and
-    only uses the IANA timezone for recurrence expansion. This means an LLM-generated
-    offset that doesn't account for DST (e.g. -08:00 during PDT) will place the event
-    at the wrong wall-clock time.
-
-    By stripping the offset and keeping only the naive local time + IANA timeZone,
-    Google Calendar resolves the correct DST-aware offset automatically.
-
-    Examples:
-        "2026-03-19T12:00:00-08:00" → "2026-03-19T12:00:00"
-        "2026-03-19T12:00:00-07:00" → "2026-03-19T12:00:00"
-        "2026-03-19T12:00:00Z"      → "2026-03-19T12:00:00"
-        "2026-03-19T12:00:00"       → "2026-03-19T12:00:00" (no-op)
-    """
-    # Strip trailing Z
-    if datetime_str.endswith("Z"):
-        return datetime_str[:-1]
-    # Strip +HH:MM or -HH:MM offset at end (e.g. -07:00, +05:30)
-    return re.sub(r"[+-]\d{2}:\d{2}$", "", datetime_str)
-
-
 def _build_time_boundary(time_value: str, timezone: Optional[str]) -> Dict[str, str]:
     """Build one Google ``start``/``end`` boundary from a time string and its zone.
 
@@ -329,6 +305,13 @@ def _build_time_boundary(time_value: str, timezone: Optional[str]) -> Dict[str, 
     """
     if "T" not in time_value:
         return {"date": time_value}
+    try:
+        parsed = datetime.datetime.fromisoformat(re.sub(r"[zZ]$", "+00:00", time_value))
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid RFC3339 timestamp {time_value!r}. Use a value such as "
+            "'2026-09-17T11:35:00' or '2026-09-17T11:35:00-07:00'."
+        ) from exc
     # `is None` rather than falsy: an explicitly empty zone is an invalid value, not
     # an omitted one, and must reach validation below instead of being treated as
     # "no zone given".
@@ -339,15 +322,41 @@ def _build_time_boundary(time_value: str, timezone: Optional[str]) -> Dict[str, 
     # be worse than erroring: it silently discards the zone the caller asked for and
     # books the event somewhere else.
     try:
-        ZoneInfo(timezone)
+        zone = ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError(
             f"Unrecognized IANA timezone {timezone!r}. Use a zone name such as "
             "'America/New_York' or 'Europe/Amsterdam'."
         ) from exc
-    # With an IANA zone present, drop any caller-supplied offset so Google resolves
-    # the DST-correct one from the zone name itself (see _strip_utc_offset).
-    return {"dateTime": _strip_utc_offset(time_value), "timeZone": timezone}
+    if parsed.tzinfo is not None:
+        time_value = parsed.astimezone(zone).isoformat()
+    return {"dateTime": time_value, "timeZone": timezone}
+
+
+def _saved_event_times(event: Dict[str, Any]) -> str:
+    start = parse_event_boundary(event, "start")
+    end = parse_event_boundary(event, "end")
+    lines = [
+        f"Saved start: {_format_event_time(event, 'start')}",
+        f"Saved end: {_format_event_time(event, 'end')}",
+    ]
+    if start and end:
+        if start.moment and end.moment:
+            # Subtraction in a shared ZoneInfo uses wall time across DST changes.
+            utc = datetime.timezone.utc
+            seconds = round(
+                (
+                    end.moment.astimezone(utc) - start.moment.astimezone(utc)
+                ).total_seconds()
+            )
+            lines.append(
+                f"Elapsed duration: {seconds / 60:.15g} minutes ({seconds} seconds)"
+            )
+        elif start.is_all_day and end.is_all_day:
+            days = (end.local_date - start.local_date).days
+            unit = "day" if days == 1 else "days"
+            lines.append(f"All-day span: {days} {unit} (end date exclusive)")
+    return "\n" + "\n".join(lines)
 
 
 @server.tool(
@@ -819,7 +828,7 @@ async def _create_event_impl(
     calendar_id: str = "primary",
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[List[str]] = None,
+    attendees: Optional[List[Union[str, Dict[str, Any]]]] = None,
     timezone: Optional[str] = None,
     attachments: Optional[List[str]] = None,
     add_google_meet: bool = False,
@@ -864,8 +873,9 @@ async def _create_event_impl(
         event_body["location"] = location
     if description:
         event_body["description"] = description
-    if attendees:
-        event_body["attendees"] = [{"email": email} for email in attendees]
+    normalized_attendees = _normalize_attendees(attendees)
+    if normalized_attendees is not None:
+        event_body["attendees"] = normalized_attendees
 
     # Handle reminders
     if reminders is not None or not use_default_reminders:
@@ -962,6 +972,8 @@ async def _create_event_impl(
     link = created_event.get("htmlLink", "No link available")
     confirmation_message = f"Successfully created event '{created_event.get('summary', summary)}' for {user_google_email}. Link: {link}"
 
+    confirmation_message += _saved_event_times(created_event)
+
     # Surface the conferencing link (native Meet or third-party add-on) if present
     if add_google_meet or conference_data is not None:
         meeting_link = _get_meeting_link(created_event)
@@ -975,8 +987,12 @@ async def _create_event_impl(
     return confirmation_message
 
 
+class AttendeeValidationError(ValueError, UserInputError):
+    """Invalid attendee input, preserving ValueError compatibility for callers."""
+
+
 def _normalize_attendees(
-    attendees: Optional[Union[List[str], List[Dict[str, Any]]]],
+    attendees: Optional[List[Union[str, Dict[str, Any]]]],
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Normalize attendees input to list of attendee objects.
@@ -987,6 +1003,10 @@ def _normalize_attendees(
     - Mixed list of both formats
 
     Returns list of attendee dicts with at minimum 'email' key.
+
+    Raises:
+        AttendeeValidationError: If an attendee is neither an email string nor a
+            dict with an 'email' key, so it is never silently left off the event.
     """
     if attendees is None:
         return None
@@ -998,8 +1018,9 @@ def _normalize_attendees(
         elif isinstance(att, dict) and "email" in att:
             normalized.append(att)
         else:
-            logger.warning(
-                f"[_normalize_attendees] Invalid attendee format (type={type(att).__name__}), skipping"
+            raise AttendeeValidationError(
+                "Each attendee must be an email string or an object with an "
+                f"'email' key; got {type(att).__name__}"
             )
     return normalized if normalized else None
 
@@ -1014,7 +1035,7 @@ async def _modify_event_impl(
     end_time: Optional[str] = None,
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[Union[List[str], List[Dict[str, Any]]]] = None,
+    attendees: Optional[List[Union[str, Dict[str, Any]]]] = None,
     timezone: Optional[str] = None,
     add_google_meet: Optional[bool] = None,
     conference_data: Optional[Dict[str, Any]] = None,
@@ -1073,10 +1094,10 @@ async def _modify_event_impl(
         else:
             # Preserve existing event's useDefault value if not explicitly specified
             try:
-                existing_event = (
+                existing_event = await asyncio.to_thread(
                     service.events()
                     .get(calendarId=calendar_id, eventId=event_id)
-                    .execute()
+                    .execute
                 )
                 reminder_data["useDefault"] = existing_event.get("reminders", {}).get(
                     "useDefault", True
@@ -1239,6 +1260,8 @@ async def _modify_event_impl(
     link = updated_event.get("htmlLink", "No link available")
     confirmation_message = f"Successfully modified event '{updated_event.get('summary', summary)}' (ID: {event_id}) for {user_google_email}. Link: {link}"
 
+    confirmation_message += _saved_event_times(updated_event)
+
     # Surface the conferencing link (native Meet or third-party add-on) if present
     if conference_data is not None:
         meeting_link = _get_meeting_link(updated_event)
@@ -1399,7 +1422,7 @@ async def manage_event(
     calendar_id: str = "primary",
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[Union[StringList, List[Dict[str, Any]]]] = None,
+    attendees: Optional[StringOrDictList] = None,
     timezone: Optional[str] = None,
     attachments: Optional[StringList] = None,
     add_google_meet: Optional[bool] = None,
@@ -1431,20 +1454,22 @@ async def manage_event(
         user_google_email (str): The user's Google email address. Required.
         action (str): Action to perform - "create", "update", "delete", or "rsvp".
         summary (Optional[str]): Event title (required for create).
-        start_time (Optional[str]): Start time in RFC3339 format (required for create).
-        end_time (Optional[str]): End time in RFC3339 format (required for create).
+        start_time (Optional[str]): Start time (required for create). An RFC3339 UTC offset identifies the exact instant and is preserved. Without an offset, supply start_timezone or timezone. For a local wall-clock time, omit the offset and pass the zone so Google resolves daylight saving; a wrong offset moves the event. Date-only values create all-day events.
+        end_time (Optional[str]): End time (required for create). An RFC3339 UTC offset identifies the exact instant and is preserved. Without an offset, supply end_timezone or timezone. All-day end dates are exclusive.
         event_id (Optional[str]): Event ID (required for update and delete).
         calendar_id (str): Calendar ID (default: 'primary').
         description (Optional[str]): Event description.
         location (Optional[str]): Event location.
-        attendees (Optional[Union[List[str], List[Dict[str, Any]]]]): Attendee email addresses or objects.
+        attendees (Optional[List[Union[str, Dict[str, Any]]]]): Attendee email addresses, attendee objects (e.g. {"email": ..., "responseStatus": "accepted"}), or a mix of both.
         timezone (Optional[str]): IANA timezone applied to both boundaries (e.g.,
-            "America/New_York"). Overridden per boundary by start_timezone/end_timezone.
+            "America/New_York"). Converts offset-bearing timestamps without changing their
+            instant; interprets offset-free timestamps as local times in this zone.
+            Overridden per boundary by start_timezone/end_timezone.
         start_timezone (Optional[str]): IANA timezone for the start boundary only,
             overriding timezone. Use for events whose two ends sit in different zones -
             a flight departing 13:45 "Asia/Jerusalem" and landing 17:50
-            "Europe/Amsterdam" is one event authored in two zones. Passing a single
-            timezone for such an event silently rewrites one end's wall-clock.
+            "Europe/Amsterdam" is one event authored in two zones. Explicit timestamp
+            offsets always preserve the instant, even when the zone differs.
         end_timezone (Optional[str]): IANA timezone for the end boundary only,
             overriding timezone. See start_timezone.
         attachments (Optional[List[str]]): List of Google Drive file URLs or IDs to attach.
@@ -1707,6 +1732,7 @@ async def _list_ooo_events_impl(
     time_max: Optional[str] = None,
     max_results: int = 10,
     timezone: Optional[str] = None,
+    page_token: Optional[str] = None,
 ) -> str:
     """Internal implementation for listing Out of Office calendar events."""
     logger.info(
@@ -1714,6 +1740,11 @@ async def _list_ooo_events_impl(
     )
 
     formatted_time_min = _correct_time_format_for_api(time_min, "time_min", timezone)
+    if page_token and formatted_time_min is None:
+        raise ValueError(
+            "[list_ooo_events] page_token requires time_min. Pass the Pagination "
+            "time_min from the previous response to preserve the original range."
+        )
     if formatted_time_min:
         effective_time_min = formatted_time_min
     else:
@@ -1748,13 +1779,27 @@ async def _list_ooo_events_impl(
     }
     if effective_time_max:
         request_params["timeMax"] = effective_time_max
+    if page_token:
+        request_params["pageToken"] = page_token
 
     events_result = await asyncio.to_thread(
         lambda: service.events().list(**request_params).execute()
     )
     items = events_result.get("items", [])
+    next_page_token = events_result.get("nextPageToken")
+    pagination_info = ""
+    if next_page_token:
+        pagination_info = (
+            f"Next page token: {next_page_token}"
+            f"\nPagination time_min: {effective_time_min}"
+        )
 
     if not items:
+        if next_page_token:
+            return (
+                f"No out-of-office events on this page for {user_google_email}, and more pages remain."
+                f"\n{pagination_info}"
+            )
         return f"No out-of-office events found for {user_google_email}."
 
     lines = [f"Found {len(items)} out-of-office event(s) for {user_google_email}:\n"]
@@ -1778,6 +1823,8 @@ async def _list_ooo_events_impl(
         lines.append(f"   Event ID: {event_id}")
         lines.append("")
 
+    if next_page_token:
+        lines.append(pagination_info)
     return "\n".join(lines).rstrip()
 
 
@@ -1940,6 +1987,7 @@ async def manage_out_of_office(
     max_results: int = 10,
     event_id: Optional[str] = None,
     calendar_id: str = "primary",
+    page_token: Optional[str] = None,
 ) -> str:
     """
     Manages Out of Office events on Google Calendar. These special events auto-decline
@@ -1957,9 +2005,10 @@ async def manage_out_of_office(
         timezone (Optional[str]): Timezone for the event (e.g., "America/New_York", "Europe/London"). Required when using date-only values or dateTime values without an explicit UTC offset.
         time_min (Optional[str]): For "list" action: start of time range. Defaults to current time. Recurring series are expanded into individual instances in the requested range.
         time_max (Optional[str]): For "list" action: end of time range.
-        max_results (int): For "list" action: maximum events to return. Defaults to 10.
+        max_results (int): For "list" action: maximum events to return in one page. Defaults to 10.
         event_id (Optional[str]): Event ID. Required for "update" and "delete" actions.
         calendar_id (str): Calendar ID. Defaults to 'primary'. Out of Office status events live on primary calendars, so use 'primary' or a user's primary calendar ID/email rather than a secondary calendar ID.
+        page_token (Optional[str]): For "list" action: token for the next page, taken from a previous response. Also pass the response's Pagination time_min as time_min, even if omitted on the first call. Keep all other query parameters unchanged.
 
     Returns:
         str: Confirmation message with event details, or a formatted list of OOO events.
@@ -1989,6 +2038,7 @@ async def manage_out_of_office(
             time_max=time_max,
             max_results=max_results,
             timezone=timezone,
+            page_token=page_token,
         )
     elif action_lower == "update":
         if not event_id:
@@ -2160,6 +2210,7 @@ async def _list_focus_time_events_impl(
     time_max: Optional[str] = None,
     max_results: int = 10,
     timezone: Optional[str] = None,
+    page_token: Optional[str] = None,
 ) -> str:
     """Internal implementation for listing Focus Time calendar events."""
     logger.info(
@@ -2167,6 +2218,11 @@ async def _list_focus_time_events_impl(
     )
 
     formatted_time_min = _correct_time_format_for_api(time_min, "time_min", timezone)
+    if page_token and formatted_time_min is None:
+        raise ValueError(
+            "[list_focus_time_events] page_token requires time_min. Pass the Pagination "
+            "time_min from the previous response to preserve the original range."
+        )
     if formatted_time_min:
         effective_time_min = formatted_time_min
     else:
@@ -2201,13 +2257,27 @@ async def _list_focus_time_events_impl(
     }
     if effective_time_max:
         request_params["timeMax"] = effective_time_max
+    if page_token:
+        request_params["pageToken"] = page_token
 
     events_result = await asyncio.to_thread(
         lambda: service.events().list(**request_params).execute()
     )
     items = events_result.get("items", [])
+    next_page_token = events_result.get("nextPageToken")
+    pagination_info = ""
+    if next_page_token:
+        pagination_info = (
+            f"Next page token: {next_page_token}"
+            f"\nPagination time_min: {effective_time_min}"
+        )
 
     if not items:
+        if next_page_token:
+            return (
+                f"No Focus Time events on this page for {user_google_email}, and more pages remain."
+                f"\n{pagination_info}"
+            )
         return f"No Focus Time events found for {user_google_email}."
 
     lines = [f"Found {len(items)} Focus Time event(s) for {user_google_email}:\n"]
@@ -2234,6 +2304,8 @@ async def _list_focus_time_events_impl(
         lines.append(f"   Event ID: {event_id}")
         lines.append("")
 
+    if next_page_token:
+        lines.append(pagination_info)
     return "\n".join(lines).rstrip()
 
 
@@ -2414,6 +2486,7 @@ async def manage_focus_time(
     max_results: int = 10,
     event_id: Optional[str] = None,
     calendar_id: str = "primary",
+    page_token: Optional[str] = None,
 ) -> str:
     """
     Manages Focus Time events on Google Calendar. These special events auto-decline
@@ -2434,9 +2507,10 @@ async def manage_focus_time(
         timezone (Optional[str]): Timezone for the event (e.g., "America/New_York", "Europe/London"). Required when using date-only values or dateTime values without an explicit UTC offset.
         time_min (Optional[str]): For "list" action: start of time range. Defaults to current time. Recurring series are expanded into individual instances in the requested range.
         time_max (Optional[str]): For "list" action: end of time range.
-        max_results (int): For "list" action: maximum events to return. Defaults to 10.
+        max_results (int): For "list" action: maximum events to return in one page. Defaults to 10.
         event_id (Optional[str]): Event ID. Required for "update" and "delete" actions.
         calendar_id (str): Calendar ID. Defaults to 'primary'. Focus Time status events live on primary calendars, so use 'primary' or a user's primary calendar ID/email rather than a secondary calendar ID.
+        page_token (Optional[str]): For "list" action: token for the next page, taken from a previous response. Also pass the response's Pagination time_min as time_min, even if omitted on the first call. Keep all other query parameters unchanged.
 
     Returns:
         str: Confirmation message with event details, or a formatted list of Focus Time events.
@@ -2468,6 +2542,7 @@ async def manage_focus_time(
             time_max=time_max,
             max_results=max_results,
             timezone=timezone,
+            page_token=page_token,
         )
     elif action_lower == "update":
         if not event_id:
