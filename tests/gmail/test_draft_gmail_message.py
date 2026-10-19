@@ -2,6 +2,7 @@ import base64
 from email import policy
 from email.parser import BytesParser
 import os
+import ssl
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -2164,6 +2165,54 @@ async def test_send_gmail_message_does_not_fetch_thread_for_a_new_message():
     mock_service.users().messages().send.return_value.execute.assert_called_once_with(
         num_retries=0
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        HttpError(resp=SimpleNamespace(status=503, reason="Unavailable"), content=b""),
+        ssl.SSLError("record layer failure"),
+        ConnectionResetError("reset by peer"),
+        TimeoutError("timed out"),
+    ],
+)
+async def test_send_gmail_message_reports_unknown_delivery_on_ambiguous_failure(
+    error,
+):
+    mock_service = _mock_gmail_service()
+    mock_service.users().messages().send().execute.side_effect = error
+
+    with pytest.raises(ToolError, match="Check the Sent folder before sending again"):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_a_rejected_send():
+    mock_service = _mock_gmail_service()
+    rejected = HttpError(
+        resp=SimpleNamespace(status=400, reason="Invalid To header"), content=b""
+    )
+    mock_service.users().messages().send().execute.side_effect = rejected
+
+    with pytest.raises(HttpError) as excinfo:
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+    assert excinfo.value is rejected
 
 
 def _thread_lookup_error(status, reason):

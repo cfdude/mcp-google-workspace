@@ -313,6 +313,22 @@ async def _fetch_with_retry(
     return item_id, None, last_error
 
 
+async def send_message_once(service, send_body: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a message without retries, flagging failures that may have delivered it."""
+    try:
+        return await asyncio.to_thread(
+            service.users().messages().send(userId="me", body=send_body).execute,
+            num_retries=0,
+        )
+    except (HttpError, ssl.SSLError, TimeoutError, ConnectionError) as error:
+        if isinstance(error, HttpError) and (_http_error_status(error) or 0) < 500:
+            raise
+        raise ToolExecutionError(
+            f"Gmail send failed with an ambiguous error ({error}), so the message "
+            "may already have been delivered. Check the Sent folder before sending again."
+        ) from error
+
+
 def _retryable_result_ids(
     results: Mapping[str, Mapping[str, Any]], item_ids: Iterable[str]
 ) -> list[str]:
