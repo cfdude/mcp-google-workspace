@@ -393,7 +393,6 @@ async def test_batch_failure_falls_back_to_sequential(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_include_headers_lists_labels_so_drafts_are_told_from_sent_mail():
-    # A re-saved draft has the owner's From and a fresh Date, like sent mail (#1265).
     draft = _metadata_response("m1")
     draft["labelIds"] = ["DRAFT"]
     sent = _metadata_response("m2")
@@ -411,7 +410,6 @@ async def test_include_headers_lists_labels_so_drafts_are_told_from_sent_mail():
 
 @pytest.mark.asyncio
 async def test_include_headers_without_label_ids_adds_no_labels_line():
-    # Gmail may omit labelIds; the row then keeps today's shape.
     service = _build_service(
         list_response=_list_response(["m1"]),
         message_responses={("m1", "metadata"): _metadata_response("m1")},

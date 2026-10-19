@@ -1655,15 +1655,9 @@ async def _fetch_search_result_headers(
 
 
 def _extract_search_metadata(message: Dict[str, Any]) -> Dict[str, str]:
-    """Headers of a metadata fetch, plus its labels under ``Labels`` when Gmail sends any.
-
-    A search without a label operator returns drafts and sent mail together, and a
-    re-saved draft has the owner's From and a fresh Date, so the labels (DRAFT, SENT,
-    ...) are what tell them apart.
-    """
+    """Return a metadata fetch's headers, plus its label IDs under ``Labels`` if any."""
     metadata = _extract_headers(message.get("payload") or {}, GMAIL_METADATA_HEADERS)
-    label_ids = message.get("labelIds") or []
-    if label_ids:
+    if label_ids := message.get("labelIds"):
         metadata["Labels"] = ", ".join(label_ids)
     return metadata
 
@@ -1787,14 +1781,14 @@ async def search_gmail_messages(
 
     Args:
         query (str): The search query. Supports standard Gmail search operators.
+            Results include drafts unless the query excludes them (e.g. in:sent or -in:drafts).
         user_google_email (str): The user's Google email address. Required.
         page_size (int): The maximum number of messages to return. Defaults to 10.
         page_token (Optional[str]): Token for retrieving the next page of results. Use the next_page_token from a previous response.
         include_headers (bool): If True, also fetch each message's metadata and include
-            Subject, From, Date and the message labels (for example DRAFT or SENT)
-            per result. A query without a label operator such as in:sent also returns
-            drafts. Costs one metadata get per result,
-            grouped into HTTP batches of up to 10, plus retries for transient failures.
+            Subject, From, Date and label IDs (e.g. DRAFT, SENT) per result. Costs one
+            metadata get per result, grouped into HTTP batches of up to 10, plus retries
+            for transient failures.
             Defaults to False (output unchanged from prior versions).
 
     Returns:
