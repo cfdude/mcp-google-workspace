@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from typing import get_type_hints
 from unittest.mock import AsyncMock, Mock, call, patch
 
@@ -862,6 +863,38 @@ async def test_update_deployment_preserves_description_when_blank():
 
     _, update_kwargs = mock_service.projects().deployments().update.call_args
     assert update_kwargs["body"]["deploymentConfig"]["description"] == "Production"
+
+
+@pytest.mark.asyncio
+async def test_update_deployment_orders_concurrent_updates_for_same_script():
+    """A later update must read the config after an earlier update lands."""
+    config = {"scriptId": "test123", "versionNumber": 1, "description": "Old"}
+
+    def read_config():
+        snapshot = dict(config)
+        time.sleep(0.05)
+        return {"deploymentConfig": snapshot}
+
+    def write_config(scriptId, deploymentId, body):
+        config.clear()
+        config.update(body["deploymentConfig"])
+        return Mock(execute=Mock(return_value=body))
+
+    mock_service = Mock()
+    deployments = mock_service.projects.return_value.deployments.return_value
+    deployments.get.return_value.execute.side_effect = read_config
+    deployments.update.side_effect = write_config
+
+    await asyncio.gather(
+        _update_deployment_impl(
+            mock_service, "test@example.com", "test123", "deploy123", "New"
+        ),
+        _update_deployment_impl(
+            mock_service, "test@example.com", "test123", "deploy123", None, 2
+        ),
+    )
+
+    assert config == {"scriptId": "test123", "versionNumber": 2, "description": "New"}
 
 
 @pytest.mark.asyncio
