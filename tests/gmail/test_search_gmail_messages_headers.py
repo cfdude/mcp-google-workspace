@@ -380,7 +380,10 @@ async def test_batch_failure_falls_back_to_sequential(monkeypatch):
     service = _build_service(
         list_response=_list_response(["msg-1"]),
         message_responses={
-            ("msg-1", "metadata"): _metadata_response("msg-1"),
+            ("msg-1", "metadata"): {
+                **_metadata_response("msg-1"),
+                "labelIds": ["DRAFT"],
+            },
         },
         batch_factory=_broken_batch,
     )
@@ -389,6 +392,7 @@ async def test_batch_failure_falls_back_to_sequential(monkeypatch):
 
     assert "Subject: Example subject" in result
     assert "From: sender@example.com" in result
+    assert "Labels: DRAFT\n" in result
 
 
 @pytest.mark.asyncio
