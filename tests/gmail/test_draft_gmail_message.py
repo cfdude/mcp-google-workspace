@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
+import httplib2
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -2175,6 +2176,7 @@ async def test_send_gmail_message_does_not_fetch_thread_for_a_new_message():
         ssl.SSLError("record layer failure"),
         ConnectionResetError("reset by peer"),
         TimeoutError("timed out"),
+        httplib2.FailedToDecompressContent("bad gzip", {}, b""),
     ],
 )
 async def test_send_gmail_message_reports_unknown_delivery_on_ambiguous_failure(
@@ -2184,6 +2186,23 @@ async def test_send_gmail_message_reports_unknown_delivery_on_ambiguous_failure(
     mock_service.users().messages().send().execute.side_effect = error
 
     with pytest.raises(ToolError, match="Check the Sent folder before sending again"):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_an_unreached_server():
+    mock_service = _mock_gmail_service()
+    unreached = httplib2.ServerNotFoundError("Unable to find the server")
+    mock_service.users().messages().send().execute.side_effect = unreached
+
+    with pytest.raises(httplib2.ServerNotFoundError):
         await _unwrap(send_gmail_message)(
             service=mock_service,
             user_google_email="user@example.com",
