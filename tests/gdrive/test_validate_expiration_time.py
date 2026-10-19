@@ -22,6 +22,5 @@ def test_accepts_rfc3339_timestamps(value):
     ["2025-01-15", "2025-01-15T00:00:00", "2025-01-15T00:00:00Z\n", ""],
 )
 def test_rejects_everything_else(value):
-    # A trailing newline used to slip past the `$` anchor and reach the API.
     with pytest.raises(ValueError, match="Invalid expiration_time"):
         validate_expiration_time(value)
