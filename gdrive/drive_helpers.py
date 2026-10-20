@@ -191,7 +191,7 @@ def validate_expiration_time(expiration_time: str) -> None:
     Raises:
         ValueError: If expiration_time is not valid RFC 3339 format
     """
-    if not RFC3339_PATTERN.match(expiration_time):
+    if not RFC3339_PATTERN.fullmatch(expiration_time):
         raise ValueError(
             f"Invalid expiration_time '{expiration_time}'. "
             "Must be RFC 3339 format (e.g., '2025-01-15T00:00:00Z')"
