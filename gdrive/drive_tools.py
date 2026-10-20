@@ -1294,7 +1294,7 @@ async def import_to_google_doc(
 
     Args:
         user_google_email (str): The user's Google email address. Required.
-        file_name (str): The name for the new Google Doc (extension will be ignored).
+        file_name (str): The name for the new Google Doc; the extension is dropped from the title. Without 'source_format', its extension also sets the format of 'content' or 'base64_content' (e.g. 'Notes.md' so Markdown tables are not imported as plain text).
         content (Optional[str]): Text content for text-based formats. Use only for short snippets or content already in memory.
         file_path (Optional[str]): Local file path or file:// URL for any supported format (MD, TXT, HTML, DOCX, ODT, RTF). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
         file_url (Optional[str]): Remote URL to fetch the file from (http/https).
@@ -1380,7 +1380,7 @@ async def import_to_google_slides(
 
     Args:
         user_google_email (str): The user's Google email address. Required.
-        file_name (str): The name for the new Google Slides presentation (extension will be ignored).
+        file_name (str): The name for the new Google Slides presentation; the extension is dropped from the title. Without 'source_format', its extension also sets the format of 'base64_content' (e.g. 'Deck.pptx').
         file_path (Optional[str]): Local file path or file:// URL for any supported format (PPTX, PPT, ODP). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
         file_url (Optional[str]): Remote URL to fetch the presentation from (http/https).
         source_format (Optional[str]): Source format hint ('pptx', 'ppt', 'odp').
@@ -1461,7 +1461,7 @@ async def import_to_google_sheets(
 
     Args:
         user_google_email (str): The user's Google email address. Required.
-        file_name (str): The name for the new Google Sheets spreadsheet (extension will be ignored).
+        file_name (str): The name for the new Google Sheets spreadsheet; the extension is dropped from the title. Without 'source_format', its extension also sets the format of 'content' or 'base64_content' (e.g. 'Data.csv').
         content (Optional[str]): Text content for text-based formats (CSV, TSV). Use only for short snippets or content already in memory.
         file_path (Optional[str]): Local file path or file:// URL for any supported format (XLSX, XLS, ODS, CSV, TSV). Appropriate for larger files than content, but file_path may still load the file into memory or perform non-streaming reads. Avoid very large files that could exceed memory or time limits; use streaming/chunked uploads or an alternative API for huge files.
         file_url (Optional[str]): Remote URL to fetch the spreadsheet from (http/https).
