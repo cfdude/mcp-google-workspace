@@ -18,10 +18,9 @@ import warnings
 
 from core.server import server
 from core.tool_registry import get_tool_components
+from tests.golden_utils import assert_matches_golden
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
-from tests.golden_utils import assert_matches_golden
 
 from gcontacts.contacts_tools import (
     EmailInput,
