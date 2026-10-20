@@ -303,6 +303,8 @@ Imports a file (Markdown, DOCX, TXT, HTML, RTF, ODT) into Google Docs format wit
 
 **Moving files**: Use `update_drive_file` with `add_parents` (destination) and `remove_parents` (source) set together.
 
+**Snapshot before destructive Doc edits**: Native Google Docs revisions cannot be pinned or named through the API (`Revision.keepForever` only applies to binary files and silently no-ops on native Docs; the Revision resource has no `name` field for them), so the reliable rollback point before a large rewrite is a sibling copy: `copy_drive_file(file_id=<doc id>, new_name="<title>.snapshot.<YYYYMMDDTHHMMSSZ>", parent_folder_id=<doc's folder>)`. Keep the original title in the name so the copy sorts next to the source, use a compact UTC timestamp (no `:`), and put the copy in the source's own folder rather than the default root. Drive allows duplicate names, so before retrying a failed snapshot step search for the name first (`search_drive_files` with `name = '<snapshot name>' and '<folder id>' in parents and trashed = false`) instead of copying again. The copy carries content and formatting but not comment threads or version history; to roll back, copy the snapshot's content back or use `copy_drive_file` on the snapshot and swap links.
+
 **Permission workflow**: Use `get_drive_file_permissions` to inspect current permissions (and get permission IDs), then `manage_drive_access` with `action: "update"` or `action: "revoke"` using those IDs.
 
 **Batch sharing**: Use `manage_drive_access` with `action: "grant_batch"` and a `recipients` list to share with multiple people in one call.
