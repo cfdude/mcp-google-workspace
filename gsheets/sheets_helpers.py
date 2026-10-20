@@ -8,6 +8,7 @@ conditional formatting helpers.
 import asyncio
 import json
 import logging
+import math
 import re
 from typing import Any, List, Optional, Union
 
@@ -26,6 +27,7 @@ A1_PART_REGEX = re.compile(r"^([A-Za-z]*)(\d*)$")
 SHEET_TITLE_SAFE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 COLUMN_LETTER_REGEX = re.compile(r"^[A-Za-z]+$")
 QUOTED_SHEET_ONLY_REGEX = re.compile(r"^'(?:[^']|'')+'$")
+MERGE_TYPES = ("MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS")
 
 
 def _column_to_index(column: str) -> Optional[int]:
@@ -249,6 +251,41 @@ def _parse_hex_color(color: Optional[str]) -> Optional[dict]:
         raise UserInputError(f"Color '{color}' is not valid hex.") from exc
 
     return {"red": red, "green": green, "blue": blue}
+
+
+def _normalize_merge_type(
+    merge_cells: Optional[bool], merge_type: Optional[str]
+) -> Optional[str]:
+    """Return the merge type to apply, or None when the call does not merge."""
+    if merge_type is None:
+        return "MERGE_ALL" if merge_cells else None
+    if merge_cells is False:
+        raise UserInputError(
+            "Cannot specify merge_type when merge_cells is False (unmerging)."
+        )
+    normalized = merge_type.strip().upper()
+    if normalized not in MERGE_TYPES:
+        raise UserInputError(f"merge_type must be one of {list(MERGE_TYPES)}.")
+    return normalized
+
+
+def _build_merge_request(grid_range: dict, range_name: str, merge_type: str) -> dict:
+    """Build a mergeCells request, rejecting ranges where any merge group is one cell."""
+    rows = grid_range.get("endRowIndex", math.inf) - grid_range.get("startRowIndex", 0)
+    cols = grid_range.get("endColumnIndex", math.inf) - grid_range.get(
+        "startColumnIndex", 0
+    )
+    group_size = {
+        "MERGE_ALL": rows * cols,
+        "MERGE_COLUMNS": rows,
+        "MERGE_ROWS": cols,
+    }[merge_type]
+    if group_size < 2:
+        raise UserInputError(
+            f"Cannot apply {merge_type} to '{range_name}': each merged group "
+            "must span at least 2 cells."
+        )
+    return {"mergeCells": {"range": grid_range, "mergeType": merge_type}}
 
 
 def _index_to_column(index: int) -> str:

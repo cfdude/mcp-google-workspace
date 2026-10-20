@@ -27,6 +27,7 @@ from gsheets.sheets_helpers import (
     _column_to_index,
     _build_boolean_rule,
     _build_gradient_rule,
+    _build_merge_request,
     _fetch_cell_formulas,
     _fetch_detailed_sheet_errors,
     _fetch_grid_metadata,
@@ -37,6 +38,7 @@ from gsheets.sheets_helpers import (
     _format_sheet_error_section,
     _insert_cell_comment,
     _normalize_chips_input,
+    _normalize_merge_type,
     _parse_a1_range,
     _parse_condition_values,
     _parse_gradient_points,
@@ -677,15 +679,13 @@ async def _format_sheet_range_impl(
         bold: Whether to apply bold formatting.
         italic: Whether to apply italic formatting.
         font_size: Font size in points.
-        merge_cells: Whether to merge (True) or unmerge (False) cells in the range.
-            Defaults to None (no merge action).
-        merge_type: Type of merge when merge_cells is True or when merge_type is specified.
-            Must be one of "MERGE_ALL", "MERGE_COLUMNS", or "MERGE_ROWS". Defaults to "MERGE_ALL".
+        merge_cells: True merges the range, False unmerges it.
+        merge_type: MERGE_ALL (default), MERGE_COLUMNS, or MERGE_ROWS; implies a merge.
 
     Returns:
         Dictionary with keys: range_name, spreadsheet_id, summary.
     """
-    # Validate at least one formatting or merge option is provided
+    # Validate at least one formatting option is provided
     has_any_format = any(
         [
             background_color,
@@ -708,22 +708,7 @@ async def _format_sheet_range_impl(
             "bold, italic, font_size, merge_cells, or merge_type)."
         )
 
-    # Validate and normalize merge options
-    normalized_merge_type = None
-    if merge_cells is False and merge_type is not None:
-        raise UserInputError(
-            "Cannot specify merge_type when merge_cells is False (unmerging)."
-        )
-
-    if merge_type is not None:
-        allowed_merge_types = {"MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"}
-        normalized_merge_type = merge_type.strip().upper()
-        if normalized_merge_type not in allowed_merge_types:
-            raise UserInputError(
-                f"merge_type must be one of {sorted(allowed_merge_types)}."
-            )
-    elif merge_cells is True:
-        normalized_merge_type = "MERGE_ALL"
+    normalized_merge_type = _normalize_merge_type(merge_cells, merge_type)
 
     # Parse colors
     bg_color_parsed = _parse_hex_color(background_color)
@@ -794,25 +779,6 @@ async def _format_sheet_range_impl(
     sheets = metadata.get("sheets", [])
     grid_range = _parse_a1_range(range_name, sheets)
 
-    # Check for single-cell merge error
-    if merge_cells is True or (
-        merge_cells is None and normalized_merge_type is not None
-    ):
-        start_row = grid_range.get("startRowIndex")
-        end_row = grid_range.get("endRowIndex")
-        start_col = grid_range.get("startColumnIndex")
-        end_col = grid_range.get("endColumnIndex")
-        if (
-            start_row is not None
-            and end_row is not None
-            and start_col is not None
-            and end_col is not None
-        ):
-            if (end_row - start_row <= 1) and (end_col - start_col <= 1):
-                raise UserInputError(
-                    f"Cannot merge single cell '{range_name}'. Merging requires a range spanning at least 2 cells."
-                )
-
     # Build userEnteredFormat and fields list
     user_entered_format = {}
     fields = []
@@ -866,9 +832,7 @@ async def _format_sheet_range_impl(
         user_entered_format["verticalAlignment"] = v_align_normalized
         fields.append("userEnteredFormat.verticalAlignment")
 
-    # Build requests
     requests = []
-
     if user_entered_format:
         requests.append(
             {
@@ -879,26 +843,12 @@ async def _format_sheet_range_impl(
                 }
             }
         )
-
-    if merge_cells is True or (
-        merge_cells is None and normalized_merge_type is not None
-    ):
+    if normalized_merge_type:
         requests.append(
-            {
-                "mergeCells": {
-                    "range": grid_range,
-                    "mergeType": normalized_merge_type,
-                }
-            }
+            _build_merge_request(grid_range, range_name, normalized_merge_type)
         )
     elif merge_cells is False:
-        requests.append(
-            {
-                "unmergeCells": {
-                    "range": grid_range,
-                }
-            }
-        )
+        requests.append({"unmergeCells": {"range": grid_range}})
 
     if not requests:
         raise UserInputError(
@@ -937,9 +887,7 @@ async def _format_sheet_range_impl(
         applied_parts.append("italic" if italic else "not italic")
     if font_size is not None:
         applied_parts.append(f"font size {font_size}")
-    if merge_cells is True or (
-        merge_cells is None and normalized_merge_type is not None
-    ):
+    if normalized_merge_type:
         applied_parts.append(f"merged cells ({normalized_merge_type})")
     elif merge_cells is False:
         applied_parts.append("unmerged cells")
@@ -958,7 +906,7 @@ async def _format_sheet_range_impl(
     title="Format Sheet Range",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
     ),
@@ -1009,10 +957,10 @@ async def format_sheet_range(
         bold (Optional[bool]): Whether to apply bold formatting.
         italic (Optional[bool]): Whether to apply italic formatting.
         font_size (Optional[int]): Font size in points.
-        merge_cells (Optional[bool]): Whether to merge (True) or unmerge (False) cells in the range.
-            Defaults to None (no merge action).
-        merge_type (Optional[str]): Type of merge when merge_cells is True or when merge_type is specified.
-            Must be one of "MERGE_ALL", "MERGE_COLUMNS", or "MERGE_ROWS". Defaults to "MERGE_ALL".
+        merge_cells (Optional[bool]): True merges the range, False unmerges it.
+            Merging keeps only the top-left value of each merged group.
+        merge_type (Optional[str]): MERGE_ALL (default), MERGE_COLUMNS, or
+            MERGE_ROWS. Setting it implies merge_cells=True.
 
     Returns:
         str: Confirmation of the applied formatting.

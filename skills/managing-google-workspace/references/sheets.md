@@ -111,7 +111,7 @@ Move rows from one sheet to another within the same spreadsheet. Preserves formu
 ## Formatting
 
 ### format_sheet_range
-Apply visual formatting to a range: colors, number formats, text wrapping, alignment, and text styling.
+Apply visual formatting to a range: colors, number formats, text wrapping, alignment, text styling, and cell merging.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
@@ -128,8 +128,8 @@ Apply visual formatting to a range: colors, number formats, text wrapping, align
 | bold | boolean | no | | |
 | italic | boolean | no | | |
 | font_size | integer | no | | Size in points |
-| merge_cells | boolean | no | | `true` to merge, `false` to unmerge |
-| merge_type | string | no | `MERGE_ALL` | `MERGE_ALL`, `MERGE_COLUMNS`, or `MERGE_ROWS` |
+| merge_cells | boolean | no | | `true` to merge, `false` to unmerge; merging keeps only the top-left value |
+| merge_type | string | no | | `MERGE_ALL` (default when merging), `MERGE_COLUMNS`, or `MERGE_ROWS`; implies a merge |
 
 ### manage_conditional_formatting
 Add, update, or delete conditional formatting rules.

@@ -12,6 +12,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from core.server import server
 from core.utils import UserInputError
 from gsheets.sheets_tools import _format_sheet_range_impl, format_sheet_range
 
@@ -590,8 +591,56 @@ async def test_format_merge_single_cell_raises():
             merge_cells=True,
         )
 
-    assert "Cannot merge single cell" in str(exc_info.value)
-    assert "spanning at least 2 cells" in str(exc_info.value)
+    assert "span at least 2 cells" in str(exc_info.value)
+    mock_service.spreadsheets().batchUpdate().execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "range_name, merge_type",
+    [("A1:A5", "MERGE_ROWS"), ("A1:C1", "MERGE_COLUMNS"), ("A:A", "MERGE_ROWS")],
+)
+async def test_format_merge_single_cell_groups_raise(range_name, merge_type):
+    """Typed merges reject ranges where every merge group is a single cell."""
+    mock_service = create_mock_service()
+
+    with pytest.raises(UserInputError, match="span at least 2 cells"):
+        await _format_sheet_range_impl(
+            service=mock_service,
+            spreadsheet_id="test_spreadsheet_123",
+            range_name=range_name,
+            bold=True,
+            merge_type=merge_type,
+        )
+
+    mock_service.spreadsheets().batchUpdate().execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "range_name, merge_type",
+    [("A1:A5", "MERGE_COLUMNS"), ("A1:C1", "MERGE_ROWS"), ("A:A", "MERGE_ALL")],
+)
+async def test_format_merge_valid_spans(range_name, merge_type):
+    """Typed merges accept ranges whose merge groups span multiple cells."""
+    mock_service = create_mock_service()
+
+    await _format_sheet_range_impl(
+        service=mock_service,
+        spreadsheet_id="test_spreadsheet_123",
+        range_name=range_name,
+        merge_type=merge_type,
+    )
+
+    requests = mock_service.spreadsheets().batchUpdate.call_args[1]["body"]["requests"]
+    assert requests[0]["mergeCells"]["mergeType"] == merge_type
+
+
+@pytest.mark.asyncio
+async def test_format_sheet_range_is_destructive():
+    """Merging discards non top-left values, so the tool advertises destructiveHint."""
+    tool = await server.get_tool("format_sheet_range")
+    assert tool.annotations.destructive_hint is True
 
 
 @pytest.mark.asyncio
