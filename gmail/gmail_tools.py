@@ -75,8 +75,8 @@ from gmail.gmail_helpers import (
     _derive_reply_all_recipients,
     _derive_reply_headers,
     _fetch_with_retry,
+    _format_id_list,
     _get_send_as_identity_and_signature,
-    _get_send_as_signature_html_for_tool,
     _http_error_status,
     _is_email_reaction,
     _new_attachment_id,
@@ -86,8 +86,11 @@ from gmail.gmail_helpers import (
     apply_gmail_filter_to_existing,
     build_label_color,
     format_filter_apply_result,
+    format_thread_label_outcomes,
     html_newlines_to_br,
     html_to_text_preserving_breaks,
+    modify_gmail_thread_labels,
+    send_message_once,
     update_gmail_filter,
 )
 
@@ -1662,9 +1665,7 @@ async def _fetch_search_result_headers(
                 headers_by_id[mid] = None
             else:
                 try:
-                    headers_by_id[mid] = _extract_headers(
-                        entry["data"].get("payload") or {}, GMAIL_METADATA_HEADERS
-                    )
+                    headers_by_id[mid] = _extract_search_metadata(entry["data"])
                 except Exception as exc:
                     logger.warning(
                         f"[search_gmail_messages] Invalid metadata for message {mid}, will retry: {exc}"
@@ -1688,9 +1689,7 @@ async def _fetch_search_result_headers(
             )
             if msg_data and not error:
                 try:
-                    headers_by_id[mid] = _extract_headers(
-                        msg_data.get("payload") or {}, GMAIL_METADATA_HEADERS
-                    )
+                    headers_by_id[mid] = _extract_search_metadata(msg_data)
                 except Exception as exc:
                     logger.warning(
                         f"[search_gmail_messages] Invalid metadata for message {mid} after retry: {exc}"
@@ -1701,6 +1700,14 @@ async def _fetch_search_result_headers(
                 )
 
     return headers_by_id
+
+
+def _extract_search_metadata(message: Dict[str, Any]) -> Dict[str, str]:
+    """Return a metadata fetch's headers, plus its label IDs under ``Labels`` if any."""
+    metadata = _extract_headers(message.get("payload") or {}, GMAIL_METADATA_HEADERS)
+    if label_ids := message.get("labelIds"):
+        metadata["Labels"] = ", ".join(label_ids)
+    return metadata
 
 
 def _format_gmail_results_plain(
@@ -1765,6 +1772,8 @@ def _format_gmail_results_plain(
                         f"     Date: {headers.get('Date', '(unknown date)')}",
                     ]
                 )
+                if headers.get("Labels"):
+                    lines.append(f"     Labels: {headers['Labels']}")
 
         lines.extend(
             [
@@ -1820,17 +1829,19 @@ async def search_gmail_messages(
 
     Args:
         query (str): The search query. Supports standard Gmail search operators.
+            Results include drafts unless the query excludes them (e.g. in:sent or -in:drafts).
         user_google_email (str): The user's Google email address. Required.
         page_size (int): The maximum number of messages to return. Defaults to 10.
         page_token (Optional[str]): Token for retrieving the next page of results. Use the next_page_token from a previous response.
         include_headers (bool): If True, also fetch each message's metadata and include
-            Subject, From, and Date per result. Costs one metadata get per result,
-            grouped into HTTP batches of up to 10, plus retries for transient failures.
+            Subject, From, Date and label IDs (e.g. DRAFT, SENT) per result. Costs one
+            metadata get per result, grouped into HTTP batches of up to 10, plus retries
+            for transient failures.
             Defaults to False (output unchanged from prior versions).
 
     Returns:
         str: LLM-friendly structured results with Message IDs, Thread IDs, and clickable Gmail web interface URLs for each found message.
-        With include_headers=True, each result also includes Subject, From, and Date.
+        With include_headers=True, each result also includes Subject, From, Date and Labels.
         Includes pagination token if more results are available.
     """
     logger.info(
@@ -2591,7 +2602,7 @@ async def get_gmail_attachment_content(
     title="Send Gmail Message",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
     ),
@@ -2865,6 +2876,11 @@ async def send_gmail_message(
         logger.info(
             f"[send_gmail_message] Forwarding message '{forward_message_id}' for '{user_google_email}'"
         )
+        if from_email:
+            _, sender_display_name, _ = await _get_send_as_identity_and_signature(
+                service, from_email=from_email, fallback_email=user_google_email
+            )
+            from_name = from_name or sender_display_name or None
         return await _forward_gmail_message_impl(
             service=service,
             message_id=forward_message_id,
@@ -2903,9 +2919,21 @@ async def send_gmail_message(
         f"[send_gmail_message] Invoked. Email: '{user_google_email}', subject_len={len(subject) if subject else 0}, Attachments: {len(attachments) if attachments else 0}"
     )
 
-    # Prepare the email message
-    # Use from_email (Send As alias) if provided, otherwise default to authenticated user
     sender_email = from_email or user_google_email
+    sender_display_name = signature_html = ""
+    if include_signature:
+        (
+            _,
+            sender_display_name,
+            signature_html,
+        ) = await _get_send_as_identity_and_signature(
+            service,
+            from_email=sender_email,
+            fallback_email=user_google_email,
+            require_match=bool(from_email),
+        )
+    if from_email and not from_name:
+        from_name = sender_display_name or None
 
     # A reply's headers, recipients and quoted original are all derivable from the
     # thread, so a caller should not have to assemble them by hand. Mirrors
@@ -2935,14 +2963,6 @@ async def send_gmail_message(
     if not to:
         raise UserInputError(
             f"Could not derive a recipient from thread '{thread_id}'. Pass 'to' explicitly."
-        )
-
-    # Optionally append the Gmail signature from send-as settings, mirroring
-    # draft_gmail_message so sent mail respects the user's Settings > Signature.
-    signature_html = ""
-    if include_signature:
-        signature_html = await _get_send_as_signature_html_for_tool(
-            service, from_email=sender_email
         )
 
     if body_format == "html":
@@ -3001,10 +3021,7 @@ async def send_gmail_message(
         send_body["threadId"] = thread_id_final
 
     # Send the message
-    sent_message = await asyncio.to_thread(
-        service.users().messages().send(userId="me", body=send_body).execute,
-        num_retries=GOOGLE_API_WRITE_RETRIES,
-    )
+    sent_message = await send_message_once(service, send_body)
     message_id = sent_message.get("id")
 
     if requested_attachment_count > 0:
@@ -3168,10 +3185,7 @@ async def _forward_gmail_message_impl(
         return f"Forward draft created{attachment_info}! Draft ID: {draft_id}"
 
     # Send the message
-    sent_message = await asyncio.to_thread(
-        service.users().messages().send(userId="me", body=send_body).execute,
-        num_retries=GOOGLE_API_WRITE_RETRIES,
-    )
+    sent_message = await send_message_once(service, send_body)
     sent_message_id = sent_message.get("id")
     return f"Email forwarded{attachment_info}! Message ID: {sent_message_id}"
 
@@ -3403,11 +3417,15 @@ async def draft_gmail_message(
     _reject_entity_escaped_html_body(body, body_format)
 
     if forward_message_id:
-        sender_email = from_email
-        if not sender_email:
-            sender_email, _ = await _get_send_as_identity_and_signature(
-                service, from_email=None, fallback_email=user_google_email
-            )
+        (
+            sender_email,
+            sender_display_name,
+            _,
+        ) = await _get_send_as_identity_and_signature(
+            service, from_email=from_email, fallback_email=user_google_email
+        )
+        if from_email and not from_name:
+            from_name = sender_display_name or None
         logger.info(
             f"[draft_gmail_message] Drafting forward of message '{forward_message_id}' for '{user_google_email}'"
         )
@@ -3442,16 +3460,19 @@ async def draft_gmail_message(
     # its signature is disabled. Otherwise resolve the identity and signature
     # together so Gmail's default sender and its signature stay aligned.
     if from_email and not include_signature:
-        sender_email, resolved_signature_html = from_email, ""
+        sender_email, sender_display_name, resolved_signature_html = from_email, "", ""
     else:
         (
             sender_email,
+            sender_display_name,
             resolved_signature_html,
         ) = await _get_send_as_identity_and_signature(
             service,
             from_email=from_email,
             fallback_email=user_google_email,
         )
+    if from_email and not from_name:
+        from_name = sender_display_name or None
     # Convert only the caller's body, before any signature or quoted original
     # is attached; see send_gmail_message.
     draft_body = html_newlines_to_br(body) if body_format == "html" else body
@@ -4435,14 +4456,6 @@ async def modify_gmail_message_labels(
     return f"Message labels updated successfully!\nMessage ID: {message_id}\n{'; '.join(actions)}"
 
 
-def _format_id_list(ids: List[str], limit: int = 10) -> str:
-    """Join IDs for a result message, truncating very long lists."""
-    shown = ", ".join(ids[:limit])
-    if len(ids) > limit:
-        shown += f", … (+{len(ids) - limit} more)"
-    return shown
-
-
 async def _verify_batch_label_changes(
     service,
     message_ids: List[str],
@@ -4565,49 +4578,51 @@ async def _verify_batch_label_changes(
 async def batch_modify_gmail_message_labels(
     service,
     user_google_email: str,
-    message_ids: StringList,
+    message_ids: _OptionalLabelIdList = None,
     add_label_ids: _OptionalLabelIdList = None,
     remove_label_ids: _OptionalLabelIdList = None,
     verify: bool = True,
+    thread_ids: _OptionalLabelIdList = None,
 ) -> str:
     """
-    Adds or removes labels from multiple Gmail messages in a single batch request.
+    Adds or removes labels from multiple Gmail messages in a single batch request,
+    or from whole conversations via thread_ids.
 
-    Takes MESSAGE ids, not thread ids. Gmail's batch endpoint returns no
+    message_ids takes MESSAGE ids. Gmail's batch endpoint returns no
     per-message result and silently ignores ids it does not recognise, so by
     default this reads the messages back afterwards and reports which ids
     actually changed.
 
+    thread_ids applies the change to EVERY message of each conversation
+    (users.threads.modify), e.g. archive a conversation with
+    remove_label_ids=["INBOX"] or mark it read with remove_label_ids=["UNREAD"].
+    Each thread reports its own outcome. message_ids and thread_ids can be
+    combined; at least one is required.
+
     Args:
         user_google_email (str): The user's Google email address. Required.
-        message_ids (List[str]): A list of message IDs to modify.
+        message_ids (Optional[List[str]]): A list of message IDs to modify.
         add_label_ids (Optional[List[str]]): List of label IDs to add to the messages.
         remove_label_ids (Optional[List[str]]): List of label IDs to remove from the messages.
         verify (bool): Read the messages back and report per-id outcomes. Costs
             one extra (batched) read per id. Set False for very large sweeps
             where that cost matters and an unverified result is acceptable.
+            Not needed for thread_ids, which always report per thread.
+        thread_ids (Optional[List[str]]): Thread (conversation) IDs to modify.
 
     Returns:
         str: Which label changes were applied, and which ids did not resolve.
     """
     logger.info(
-        f"[batch_modify_gmail_message_labels] Invoked. Email: '{user_google_email}', Message IDs: '{message_ids}'"
+        f"[batch_modify_gmail_message_labels] Invoked. Email: '{user_google_email}', Message IDs: '{message_ids}', Thread IDs: '{thread_ids}'"
     )
 
     if not add_label_ids and not remove_label_ids:
         raise Exception(
             "At least one of add_label_ids or remove_label_ids must be provided."
         )
-
-    body = {"ids": message_ids}
-    if add_label_ids:
-        body["addLabelIds"] = add_label_ids
-    if remove_label_ids:
-        body["removeLabelIds"] = remove_label_ids
-
-    await asyncio.to_thread(
-        service.users().messages().batchModify(userId="me", body=body).execute
-    )
+    if not message_ids and not thread_ids:
+        raise Exception("At least one of message_ids or thread_ids must be provided.")
 
     actions = []
     if add_label_ids:
@@ -4615,6 +4630,35 @@ async def batch_modify_gmail_message_labels(
     if remove_label_ids:
         actions.append(f"Removed labels: {', '.join(remove_label_ids)}")
     action_summary = "; ".join(actions)
+
+    thread_report = ""
+    if thread_ids:
+        outcomes = await modify_gmail_thread_labels(
+            service, thread_ids, add_label_ids, remove_label_ids
+        )
+        thread_report = format_thread_label_outcomes(
+            thread_ids, outcomes, action_summary
+        )
+        if not message_ids:
+            return thread_report
+
+    body = {"ids": message_ids}
+    if add_label_ids:
+        body["addLabelIds"] = add_label_ids
+    if remove_label_ids:
+        body["removeLabelIds"] = remove_label_ids
+
+    try:
+        await asyncio.to_thread(
+            service.users().messages().batchModify(userId="me", body=body).execute
+        )
+    except Exception as error:
+        if not thread_report:
+            raise
+        raise ToolExecutionError(
+            f"Label change for message_ids failed: {error}\n\n"
+            f"The thread_ids part was already processed:\n{thread_report}"
+        ) from error
 
     total = len(message_ids)
 
@@ -4624,7 +4668,7 @@ async def batch_modify_gmail_message_labels(
             "NOT VERIFIED: Gmail's batchModify returns no per-message result and "
             "silently ignores IDs it does not recognise, so this records what was "
             "asked for, not what changed. Re-run with verify=True to confirm."
-        )
+        ) + (f"\n\n{thread_report}" if thread_report else "")
 
     statuses = await _verify_batch_label_changes(
         service, message_ids, add_label_ids, remove_label_ids
@@ -4656,4 +4700,7 @@ async def batch_modify_gmail_message_labels(
             "  The read-back failed; the change may or may not have been applied."
         )
 
+    if thread_report:
+        lines.append("")
+        lines.append(thread_report)
     return "\n".join(lines)

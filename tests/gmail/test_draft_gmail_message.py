@@ -2,6 +2,7 @@ import base64
 from email import policy
 from email.parser import BytesParser
 import os
+import ssl
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
+import httplib2
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -2013,8 +2015,14 @@ async def test_draft_gmail_message_forward_creates_draft_instead_of_sending():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("from_email", [None, "explicit@example.com"])
-async def test_forward_draft_selects_send_as_identity(from_email):
+@pytest.mark.parametrize(
+    ("from_email", "expected_from"),
+    [
+        (None, "default.alias@example.com"),
+        ("primary@example.com", "Example User <primary@example.com>"),
+    ],
+)
+async def test_forward_draft_selects_send_as_identity(from_email, expected_from):
     service = _mock_gmail_service()
     service.users().settings().sendAs().list().execute.return_value = (
         _default_alias_send_as_response()
@@ -2033,10 +2041,9 @@ async def test_forward_draft_selects_send_as_identity(from_email):
 
     raw = service.users().drafts().create.call_args.kwargs["body"]["message"]["raw"]
     drafted = _parse_raw_message(raw)
-    assert drafted["From"] == (from_email or "default.alias@example.com")
+    assert drafted["From"] == expected_from
     assert "signature" not in drafted.get_body().get_content()
-    if from_email:
-        service.users().settings().sendAs().list.assert_not_called()
+    service.users().settings().sendAs().list.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -2161,6 +2168,75 @@ async def test_send_gmail_message_does_not_fetch_thread_for_a_new_message():
     )
 
     assert mock_service.users.return_value.threads.return_value.get.call_count == 0
+    mock_service.users().messages().send.return_value.execute.assert_called_once_with(
+        num_retries=0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        HttpError(resp=SimpleNamespace(status=503, reason="Unavailable"), content=b""),
+        ssl.SSLError("record layer failure"),
+        ConnectionResetError("reset by peer"),
+        TimeoutError("timed out"),
+        httplib2.FailedToDecompressContent("bad gzip", {}, b""),
+    ],
+)
+async def test_send_gmail_message_reports_unknown_delivery_on_ambiguous_failure(
+    error,
+):
+    mock_service = _mock_gmail_service()
+    mock_service.users().messages().send().execute.side_effect = error
+
+    with pytest.raises(ToolError, match="Check the Sent folder before sending again"):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_an_unreached_server():
+    mock_service = _mock_gmail_service()
+    unreached = httplib2.ServerNotFoundError("Unable to find the server")
+    mock_service.users().messages().send().execute.side_effect = unreached
+
+    with pytest.raises(httplib2.ServerNotFoundError):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_a_rejected_send():
+    mock_service = _mock_gmail_service()
+    rejected = HttpError(
+        resp=SimpleNamespace(status=400, reason="Invalid To header"), content=b""
+    )
+    mock_service.users().messages().send().execute.side_effect = rejected
+
+    with pytest.raises(HttpError) as excinfo:
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+    assert excinfo.value is rejected
 
 
 def _thread_lookup_error(status, reason):
@@ -2240,7 +2316,7 @@ async def test_send_gmail_message_rejects_an_unresolvable_thread_id():
     with pytest.raises(UserInputError, match="not a valid Gmail API"):
         await _unwrap(send_gmail_message)(
             service=mock_service,
-            user_google_email="primary@example.com",
+            user_google_email="user@example.com",
             to="recipient@example.com",
             subject="Re: hello",
             body="Body",

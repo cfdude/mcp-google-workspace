@@ -514,6 +514,8 @@ def main():
             "Example: --permissions gmail:organize drive:readonly. "
             "Gmail levels: readonly, organize, drafts, send, full (cumulative). "
             "Other services: readonly, full. "
+            "Join levels with '+' to grant only the scopes each named level adds "
+            "(e.g. gmail:readonly+send). "
             "Mutually exclusive with --read-only and --tools."
         ),
     )
