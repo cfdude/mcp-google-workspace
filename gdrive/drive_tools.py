@@ -40,12 +40,12 @@ from core.utils import (
     GOOGLE_API_WRITE_RETRIES,
     IMAGE_MIME_TYPES,
     hide_local_file_args,
-    UserInputError,
     hide_remote_only_args,
     local_file_access_enabled,
     encode_image_content,
     OfficeXmlExtractionError,
     OfficeXmlTooLargeError,
+    UserInputError,
     extract_office_xml_text,
     extract_pdf_text,
     handle_http_errors,
@@ -1060,6 +1060,14 @@ async def create_drive_file(
         # Check if this is a file:// URL
         parsed_url = urlparse(fileUrl)
         if parsed_url.scheme == "file":
+            if not local_file_access_enabled():
+                raise UserInputError(
+                    "Local file access is disabled on this server: file paths "
+                    "resolve on the server's filesystem, not the caller's. "
+                    "Provide the file by http(s) URL or as inline content "
+                    f"instead. {upload_url_hint('mime_type')}"
+                )
+
             # Handle file:// URL - read from local filesystem
             logger.info(
                 "[create_drive_file] Detected file:// URL, reading from local filesystem"
@@ -1069,14 +1077,6 @@ async def create_drive_file(
             if running_streamable:
                 logger.warning(
                     "[create_drive_file] file:// URL requested while server runs in streamable-http mode. Ensure the file path is accessible to the server (e.g., Docker volume) or use an HTTP(S) URL."
-                )
-
-            if not local_file_access_enabled():
-                raise UserInputError(
-                    "Local file access is disabled on this server: file paths "
-                    "resolve on the server's filesystem, not the caller's. "
-                    "Provide the file by http(s) URL or as inline content "
-                    f"instead. {upload_url_hint()}"
                 )
 
             # Convert file:// URL to a cross-platform local path

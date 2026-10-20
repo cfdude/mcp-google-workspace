@@ -24,11 +24,7 @@ class SSRFFetchError(RuntimeError):
 
 
 class PrivateHostError(ValueError):
-    """A URL's host is loopback or resolves to a private/internal address.
-
-    Still a ``ValueError`` with the same message, so existing handling is
-    unchanged; the subclass lets a caller add advice without string matching.
-    """
+    """Raised when a URL's host is loopback or a private/internal address."""
 
 
 def redact_url(url: str) -> str:

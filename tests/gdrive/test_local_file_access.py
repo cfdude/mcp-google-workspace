@@ -354,20 +354,22 @@ class TestUploadUrlHint:
         assert "upload" not in str(exc.value).lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stateless", [False, True])
     @pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
     @patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
     async def test_create_localhost_url_names_upload_url(
-        self, mock_folder, host, monkeypatch
+        self, mock_folder, host, stateless, monkeypatch
     ):
         mock_folder.return_value = "root"
         monkeypatch.setenv("WORKSPACE_MCP_DISABLE_LOCAL_FILES", "true")
-        with pytest.raises(Exception) as exc:
-            await _unwrap(create_drive_file)(
-                service=Mock(),
-                user_google_email="user@example.com",
-                file_name="a.pdf",
-                fileUrl=f"http://{host}:8000/a.pdf",
-            )
+        with patch("gdrive.drive_tools.is_stateless_mode", return_value=stateless):
+            with pytest.raises(Exception) as exc:
+                await _unwrap(create_drive_file)(
+                    service=Mock(),
+                    user_google_email="user@example.com",
+                    file_name="a.pdf",
+                    fileUrl=f"http://{host}:8000/a.pdf",
+                )
         assert "URLs pointing to localhost are not allowed" in str(exc.value)
         assert "return_upload_url=true and mime_type," in str(exc.value)
 
@@ -454,6 +456,42 @@ class TestUploadUrlHint:
                 )
         assert "URLs pointing to localhost are not allowed" in str(exc.value)
         assert "upload" not in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("type_param", ["source_format", "mime_type"])
+    async def test_file_scheme_file_url_names_upload_url(self, type_param, monkeypatch):
+        monkeypatch.setenv("WORKSPACE_MCP_DISABLE_LOCAL_FILES", "true")
+        with pytest.raises(ValueError) as exc:
+            await _resolve_import_media(
+                tool_name="import_to_google_doc",
+                file_name="a.docx",
+                content=None,
+                file_path=None,
+                file_url="file:///tmp/a.docx",
+                source_format=None,
+                format_map=GOOGLE_DOCS_IMPORT_FORMATS,
+                upload_type_param=type_param,
+            )
+        assert f"return_upload_url=true and {type_param}," in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_file_scheme_file_url_has_no_hint_when_enabled(self, monkeypatch):
+        monkeypatch.delenv("WORKSPACE_MCP_DISABLE_LOCAL_FILES", raising=False)
+        with patch("core.utils.is_stateless_mode", return_value=False):
+            with pytest.raises(ValueError) as exc:
+                await _resolve_import_media(
+                    tool_name="import_to_google_doc",
+                    file_name="a.docx",
+                    content=None,
+                    file_path=None,
+                    file_url="file:///tmp/a.docx",
+                    source_format=None,
+                    format_map=GOOGLE_DOCS_IMPORT_FORMATS,
+                    upload_type_param="source_format",
+                )
+        assert str(exc.value) == (
+            "file_url must be http:// or https://, got: file:///tmp/a.docx"
+        )
 
     def test_file_url_description_does_not_promise_file_scheme_unconditionally(self):
         doc = inspect.getdoc(_unwrap(create_drive_file))

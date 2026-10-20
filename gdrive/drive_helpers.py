@@ -29,8 +29,8 @@ from googleapiclient.http import HttpRequest, MediaIoBaseDownload, MediaIoBaseUp
 from auth.service_decorator import require_google_service
 from core.file_limits import download_media_bytes
 from core.http_utils import (
-    redact_url as _redact_url,
     PrivateHostError,
+    redact_url as _redact_url,
     ssrf_safe_stream as _ssrf_safe_stream,
 )
 from core.utils import (
@@ -894,18 +894,12 @@ def upload_url_not_offered_error(routes: tuple[str, ...]) -> UserInputError:
     )
 
 
-def upload_url_hint(type_param: str = "mime_type") -> str:
-    """Pointer to ``return_upload_url`` for refusals a caller can sidestep with it.
-
-    Append only where local file access is disabled and the calling tool offers
-    ``return_upload_url``. ``type_param`` is that tool's parameter for the type
-    of the bytes: ``mime_type``, or ``source_format`` for the import tools.
-    """
+def upload_url_hint(type_param: str) -> str:
+    """Point a refusal at ``return_upload_url``, naming the tool's ``type_param``."""
     return (
         "If the file is on the caller's machine, call this tool again with "
         f"return_upload_url=true and {type_param}, then PUT the bytes to the URL it "
-        "returns (suited to large or binary files; only offered where local file "
-        "access is disabled)."
+        "returns."
     )
 
 
@@ -928,21 +922,19 @@ async def _stream_url_with_validation(
     *,
     upload_type_param: str,
 ) -> Tuple[int, Optional[str]]:
-    """Stream a remote file with shared status and size validation.
-
-    ``upload_type_param``: the calling tool's type parameter, for the hint."""
+    """Stream a remote file, hinting at the upload URL on a private-host refusal."""
     try:
         return await _stream_url(url, write_chunk)
     except PrivateHostError as exc:
         if local_file_access_enabled():
             raise
-        # Same message, plus the way round it; every caller offers return_upload_url.
         raise ValueError(f"{exc}. {upload_url_hint(upload_type_param)}") from exc
 
 
 async def _stream_url(
     url: str, write_chunk: Optional[Callable[[bytes], Awaitable[None]]]
 ) -> Tuple[int, Optional[str]]:
+    """Stream a remote file with shared status and size validation."""
     total_bytes = 0
     redacted_url = _redact_url(url)
 
@@ -1179,8 +1171,7 @@ async def _resolve_import_media(
 
     Returns ``(media, source_mime_type, closeable)``; when the source is a remote URL,
     ``closeable`` is the download stream the caller must close after upload (else None).
-    ``upload_type_param`` is the calling tool's type parameter, named by the
-    return_upload_url hint on a private-host refusal.
+    ``upload_type_param`` is the type parameter the upload-URL hint names.
     """
     # Name file_path only where the tool schema advertises it.
     path_source = "'file_path', " if local_file_access_enabled() else ""
@@ -1277,7 +1268,10 @@ async def _resolve_import_media(
     else:  # file_url is not None
         parsed_url = urlparse(file_url)
         if parsed_url.scheme not in ("http", "https"):
-            raise ValueError(f"file_url must be http:// or https://, got: {file_url}")
+            message = f"file_url must be http:// or https://, got: {file_url}"
+            if not local_file_access_enabled():
+                message = f"{message}. {upload_url_hint(upload_type_param)}"
+            raise ValueError(message)
 
         remote_file_data, remote_content_type = await _download_url_to_bytes(
             file_url, upload_type_param=upload_type_param
