@@ -12,20 +12,12 @@ Gmail levels: readonly, organize, drafts, send, full
 Tasks levels: readonly, manage, full
 Other services: readonly, full (extensible by adding entries to SERVICE_PERMISSION_LEVELS)
 
-Non-cumulative (union) mode — separate levels with ``+`` to request only the
-additive scopes of the named levels, skipping the cumulative ladder:
-
-    --permissions gmail:readonly+send
-
-This grants exactly ``{gmail.readonly, gmail.send}`` — useful when a downstream
-allowlists a narrow tool set (e.g. read + send only) and wants the OAuth grant
-to match. Each level contributes only the scopes added at that level, not the
-scopes inherited from earlier levels. Level names must match those declared in
-``SERVICE_PERMISSION_LEVELS``.
+Joining levels with ``+`` (``gmail:readonly+send``) grants only the scopes each
+named level adds, without the levels in between.
 """
 
 import logging
-from typing import Dict, FrozenSet, List, Optional, Tuple, Union
+from typing import Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 from auth.scopes import (
     GMAIL_READONLY_SCOPE,
@@ -172,33 +164,25 @@ def is_action_denied(service: str, action: str) -> bool:
 
     Returns ``False`` when granular permissions mode is not active, when the
     service has no permission entry, or when the configured level does not
-    deny the action. In union mode (when the entry is a frozenset of level
-    names), the action is denied if *any* selected level denies it — most
-    restrictive wins, so explicitly including a level always carries that
-    level's exclusions.
+    deny the action. A ``+`` union uses the denials of its highest level.
     """
     if _PERMISSIONS is None:
         return False
     level = _PERMISSIONS.get(service)
     if level is None:
         return False
-    service_denied = SERVICE_DENIED_ACTIONS.get(service, {})
-    if isinstance(level, frozenset):
-        return any(action in service_denied.get(lvl, frozenset()) for lvl in level)
-    return action in service_denied.get(level, frozenset())
+    if "+" in level:
+        level = max(level.split("+"), key=get_valid_levels(service).index)
+    denied = SERVICE_DENIED_ACTIONS.get(service, {}).get(level, frozenset())
+    return action in denied
 
-
-# Type alias: a per-service permission value is either a single cumulative
-# level name (str) or a frozenset of level names for non-cumulative union mode.
-PermissionValue = Union[str, FrozenSet[str]]
 
 # Module-level state: parsed --permissions config
-# Dict mapping service_name -> level (cumulative str) or frozenset of level
-# names (union mode), e.g. {"gmail": "organize"} or {"gmail": frozenset({"readonly", "send"})}
-_PERMISSIONS: Optional[Dict[str, PermissionValue]] = None
+# Dict mapping service_name -> level_name, e.g. {"gmail": "organize"}
+_PERMISSIONS: Optional[Dict[str, str]] = None
 
 
-def set_permissions(permissions: Optional[Dict[str, PermissionValue]]) -> None:
+def set_permissions(permissions: Optional[Dict[str, str]]) -> None:
     """Set granular permissions from parsed --permissions argument."""
     global _PERMISSIONS
     _PERMISSIONS = permissions
@@ -207,7 +191,7 @@ def set_permissions(permissions: Optional[Dict[str, PermissionValue]]) -> None:
         logger.debug("Granular permissions set: %s", permissions)
 
 
-def get_permissions() -> Optional[Dict[str, PermissionValue]]:
+def get_permissions() -> Optional[Dict[str, str]]:
     """Return current permissions dict, or None if not using granular mode."""
     return _PERMISSIONS
 
@@ -219,11 +203,15 @@ def is_permissions_mode() -> bool:
 
 def get_scopes_for_permission(service: str, level: str) -> List[str]:
     """
-    Get cumulative scopes for a service at a given permission level.
+    Get scopes for a service at a given permission level.
 
-    Returns all scopes up to and including the named level.
+    Returns all scopes up to and including the named level, or only the named
+    levels' own scopes for a ``+`` union.
     Raises ValueError if service or level is unknown.
     """
+    if "+" in level:
+        return get_scopes_for_union(service, level.split("+"))
+
     levels = SERVICE_PERMISSION_LEVELS.get(service)
     if levels is None:
         raise ValueError(f"Unknown service: '{service}'")
@@ -246,49 +234,38 @@ def get_scopes_for_permission(service: str, level: str) -> List[str]:
     return sorted(set(cumulative))
 
 
-def get_scopes_for_union(service: str, levels: FrozenSet[str]) -> List[str]:
-    """
-    Get the union of additive scopes for a set of levels (non-cumulative).
-
-    Each level contributes only its own additive scopes — the caller is
-    responsible for including ``readonly`` if read access is desired.
-
-    Raises ValueError if any level is unknown.
-    """
+def get_scopes_for_union(service: str, levels: Iterable[str]) -> List[str]:
+    """Get only the scopes each named level adds. Raises ValueError if any is unknown."""
     service_levels = SERVICE_PERMISSION_LEVELS.get(service)
     if service_levels is None:
         raise ValueError(f"Unknown service: '{service}'")
-    if not levels:
+    requested = set(levels)
+    if not requested:
         raise ValueError(f"Empty level set for service '{service}'")
 
     additive_scopes = dict(service_levels)
-    unknown = levels.difference(additive_scopes)
+    unknown = sorted(requested.difference(additive_scopes))
     if unknown:
-        level = sorted(unknown)[0]
         raise ValueError(
-            f"Unknown permission level '{level}' for service '{service}'. "
+            f"Unknown permission level '{unknown[0]}' for service '{service}'. "
             f"Valid levels: {list(additive_scopes)}"
         )
 
-    return sorted({scope for level in levels for scope in additive_scopes[level]})
+    return sorted({scope for level in requested for scope in additive_scopes[level]})
 
 
 def get_all_permission_scopes() -> List[str]:
     """
     Get the combined scopes for all services at their configured permission levels.
 
-    Handles both cumulative (str) and union-mode (frozenset) entries.
     Only meaningful when is_permissions_mode() is True.
     """
     if _PERMISSIONS is None:
         return []
 
     all_scopes: set[str] = set()
-    for service, value in _PERMISSIONS.items():
-        if isinstance(value, frozenset):
-            all_scopes.update(get_scopes_for_union(service, value))
-        else:
-            all_scopes.update(get_scopes_for_permission(service, value))
+    for service, level in _PERMISSIONS.items():
+        all_scopes.update(get_scopes_for_permission(service, level))
     return list(all_scopes)
 
 
@@ -311,25 +288,22 @@ def get_valid_levels(service: str) -> List[str]:
     return [name for name, _ in levels]
 
 
-def parse_permissions_arg(permissions_list: List[str]) -> Dict[str, PermissionValue]:
+def parse_permissions_arg(permissions_list: List[str]) -> Dict[str, str]:
     """
     Parse --permissions arguments like ["gmail:organize", "drive:full"] or
-    ["gmail:readonly+send"] for non-cumulative union mode.
+    ["gmail:readonly+send"].
 
-    Returns dict mapping service -> level. The value is a ``str`` for the
-    cumulative ladder form (``gmail:organize``) or a ``frozenset[str]`` of
-    level names for the union form (``gmail:readonly+send``).
-
+    Returns dict mapping service -> level.
     Raises ValueError on parse errors (unknown service, invalid level, bad format).
     """
-    result: Dict[str, PermissionValue] = {}
+    result: Dict[str, str] = {}
     for entry in permissions_list:
         if ":" not in entry:
             raise ValueError(
                 f"Invalid permission format: '{entry}'. "
                 f"Expected 'service:level' (e.g., 'gmail:organize', 'drive:readonly')"
             )
-        service, level_spec = entry.split(":", 1)
+        service, level = entry.split(":", 1)
         if service in result:
             raise ValueError(f"Duplicate service in permissions: '{service}'")
         if service not in SERVICE_PERMISSION_LEVELS:
@@ -338,27 +312,18 @@ def parse_permissions_arg(permissions_list: List[str]) -> Dict[str, PermissionVa
                 f"Valid services: {sorted(SERVICE_PERMISSION_LEVELS.keys())}"
             )
         valid = get_valid_levels(service)
-
-        if "+" in level_spec:
-            parts = [p.strip() for p in level_spec.split("+")]
-            if any(not p for p in parts):
+        parts = level.split("+")
+        if len(parts) > 1 and not all(parts):
+            raise ValueError(
+                f"Invalid union spec for service '{service}': '{level}'. "
+                f"Expected non-empty level names separated by '+' "
+                f"(e.g., 'gmail:readonly+send')"
+            )
+        for part in parts:
+            if part not in valid:
                 raise ValueError(
-                    f"Invalid union spec for service '{service}': '{level_spec}'. "
-                    f"Expected non-empty level names separated by '+' "
-                    f"(e.g., 'gmail:readonly+send')"
-                )
-            for part in parts:
-                if part not in valid:
-                    raise ValueError(
-                        f"Unknown level '{part}' for service '{service}'. "
-                        f"Valid levels: {valid}"
-                    )
-            result[service] = frozenset(parts)
-        else:
-            if level_spec not in valid:
-                raise ValueError(
-                    f"Unknown level '{level_spec}' for service '{service}'. "
+                    f"Unknown level '{part}' for service '{service}'. "
                     f"Valid levels: {valid}"
                 )
-            result[service] = level_spec
+        result[service] = level
     return result

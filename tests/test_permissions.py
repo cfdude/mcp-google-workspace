@@ -218,13 +218,12 @@ class TestParsePermissionsArgUnion:
 
     def test_simple_union(self):
         result = parse_permissions_arg(["gmail:readonly+send"])
-        assert result == {"gmail": frozenset({"readonly", "send"})}
+        assert result == {"gmail": "readonly+send"}
 
     def test_union_and_cumulative_mixed_across_services(self):
         """Different services can use different modes in the same invocation."""
         result = parse_permissions_arg(["gmail:readonly+send", "drive:full"])
-        assert result["gmail"] == frozenset({"readonly", "send"})
-        assert result["drive"] == "full"
+        assert result == {"gmail": "readonly+send", "drive": "full"}
 
     def test_union_empty_component_raises(self):
         with pytest.raises(ValueError, match="Invalid union spec"):
@@ -236,10 +235,10 @@ class TestParsePermissionsArgUnion:
 
 
 class TestGetScopesForUnion:
-    """Tests for get_scopes_for_union() — non-cumulative scope assembly."""
+    """Tests for get_scopes_for_union() non-cumulative scope assembly."""
 
     def test_readonly_plus_send_yields_exact_two_scopes(self):
-        """The canonical issue-#808 case: gmail:readonly+send → {readonly, send}."""
+        """The canonical issue-#808 case: gmail:readonly+send -> {readonly, send}."""
         scopes = get_scopes_for_union("gmail", frozenset({"readonly", "send"}))
         assert set(scopes) == {GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE}
 
@@ -259,7 +258,7 @@ class TestGetScopesForUnion:
 
 
 class TestUnionModeIntegration:
-    """End-to-end: parse → set → resolve scopes via get_all_permission_scopes."""
+    """End-to-end: parse, set, then resolve scopes via get_all_permission_scopes."""
 
     def test_gmail_read_send_grants_exactly_two_scopes(self):
         """Issue #808 acceptance: read+send must produce the exact downstream scope set."""
@@ -281,13 +280,20 @@ class TestUnionModeIntegration:
 class TestIsActionDeniedUnion:
     """Tests for is_action_denied() under union-mode permissions."""
 
-    def test_union_denies_if_any_selected_level_denies(self):
+    def test_union_topped_by_denying_level_denies(self):
         """tasks:readonly+manage should still deny delete (manage's exclusion)."""
-        set_permissions({"tasks": frozenset({"readonly", "manage"})})
+        set_permissions(parse_permissions_arg(["tasks:readonly+manage"]))
         assert is_action_denied("tasks", "delete") is True
         assert is_action_denied("tasks", "clear_completed") is True
 
     def test_union_without_denying_level_allows(self):
-        """A union that omits the denying level should not deny."""
-        set_permissions({"tasks": frozenset({"readonly", "full"})})
+        """A union topped by a non-denying level should not deny."""
+        set_permissions(parse_permissions_arg(["tasks:readonly+full"]))
         assert is_action_denied("tasks", "delete") is False
+
+    def test_union_including_full_matches_cumulative_full(self):
+        """tasks:manage+full grants tasks:full's scopes, so it must allow delete too."""
+        set_permissions(parse_permissions_arg(["tasks:manage+full"]))
+        assert get_allowed_scopes_set() == {TASKS_SCOPE}
+        assert is_action_denied("tasks", "delete") is False
+        assert is_action_denied("tasks", "clear_completed") is False

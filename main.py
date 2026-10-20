@@ -7,12 +7,9 @@ import socket
 import sys
 from functools import partial
 from importlib import metadata, import_module
-from typing import TYPE_CHECKING, NoReturn
+from typing import NoReturn
 from dotenv import load_dotenv
 from core.startup_ui import StartupDisplay, collapse_home, wordmark_lines
-
-if TYPE_CHECKING:
-    from auth.permissions import PermissionValue
 
 # Prevent any stray startup output on macOS (e.g. platform identifiers) from
 # corrupting the MCP JSON-RPC handshake on stdout. We capture anything written
@@ -330,8 +327,8 @@ def resolve_permissions_mode_selection(
 
 
 def narrow_permissions_to_services(
-    permissions: dict[str, "PermissionValue"], services: list[str]
-) -> dict[str, "PermissionValue"]:
+    permissions: dict[str, str], services: list[str]
+) -> dict[str, str]:
     """Restrict permission entries to the provided service list order."""
     return {
         service: permissions[service] for service in services if service in permissions
@@ -517,10 +514,8 @@ def main():
             "Example: --permissions gmail:organize drive:readonly. "
             "Gmail levels: readonly, organize, drafts, send, full (cumulative). "
             "Other services: readonly, full. "
-            "Non-cumulative union mode: join levels with '+' to request only "
-            "the additive scopes of the named levels "
-            "(e.g. --permissions gmail:readonly+send grants exactly "
-            "{gmail.readonly, gmail.send}). "
+            "Join levels with '+' to grant only the scopes each named level adds "
+            "(e.g. gmail:readonly+send). "
             "Mutually exclusive with --read-only and --tools."
         ),
     )
