@@ -1,5 +1,6 @@
 """Unit tests for naming Google Chat spaces that have no displayName."""
 
+import json
 import ssl
 from unittest.mock import Mock
 
@@ -54,14 +55,10 @@ def _http_error(status):
     return HttpError(httplib2.Response({"status": status}), b"{}")
 
 
-def _scope_error():
-    body = (
-        b'{"error": {"code": 403, "message": "Request had insufficient '
-        b'authentication scopes.", "status": "PERMISSION_DENIED", "details": '
-        b'[{"@type": "type.googleapis.com/google.rpc.ErrorInfo", '
-        b'"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "domain": "googleapis.com"}]}}'
-    )
-    return HttpError(httplib2.Response({"status": 403}), body)
+def _forbidden_error(reason):
+    detail = {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason}
+    body = {"error": {"code": 403, "message": "Forbidden", "details": [detail]}}
+    return HttpError(httplib2.Response({"status": 403}), json.dumps(body).encode())
 
 
 def _request(result=None, error=None):
@@ -341,7 +338,9 @@ async def test_list_spaces_does_not_name_space_after_caller_when_self_id_is_miss
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [_scope_error(), _http_error(429)])
+@pytest.mark.parametrize(
+    "error", [_forbidden_error("ACCESS_TOKEN_SCOPE_INSUFFICIENT"), _http_error(429)]
+)
 async def test_list_spaces_stops_listing_members_once_scope_missing_or_rate_limited(
     error,
 ):
@@ -357,7 +356,13 @@ async def test_list_spaces_stops_listing_members_once_scope_missing_or_rate_limi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error", [_http_error(403), _http_error(404), TimeoutError("timed out")]
+    "error",
+    [
+        _http_error(403),
+        _forbidden_error("IAM_PERMISSION_DENIED"),
+        _http_error(404),
+        TimeoutError("timed out"),
+    ],
 )
 async def test_list_spaces_keeps_listing_members_after_space_specific_error(error):
     chat_service = _chat_service(
