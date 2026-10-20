@@ -1,11 +1,7 @@
-"""Tests for copy_drive_file copy_comments passthrough (issue #1206)."""
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+from googleapiclient.discovery import build
 
 from gdrive.drive_tools import copy_drive_file
 
@@ -17,7 +13,7 @@ def _unwrap(tool):
     return fn
 
 
-def _service():
+async def _copy(**kwargs):
     service = Mock()
     service.files().copy().execute = Mock(
         return_value={
@@ -27,11 +23,7 @@ def _service():
             "webViewLink": "https://docs.google.com/document/d/copy-1/edit",
         }
     )
-    return service
-
-
-def _patch_resolvers():
-    return (
+    with (
         patch(
             "gdrive.drive_tools.resolve_drive_item",
             new=AsyncMock(return_value=("file-1", {"name": "Doc"})),
@@ -40,33 +32,22 @@ def _patch_resolvers():
             "gdrive.drive_tools.resolve_folder_id",
             new=AsyncMock(return_value="root"),
         ),
-    )
+    ):
+        await _unwrap(copy_drive_file)(
+            service, user_google_email="you@gmail.com", file_id="file-1", **kwargs
+        )
+    return service.files().copy.call_args.kwargs
 
 
 @pytest.mark.asyncio
-async def test_copy_comments_true_reaches_files_copy():
-    raw = _unwrap(copy_drive_file)
-    service = _service()
-    item_patch, folder_patch = _patch_resolvers()
-    with item_patch, folder_patch:
-        await raw(
-            service,
-            user_google_email="you@gmail.com",
-            file_id="file-1",
-            copy_comments=True,
-        )
-    assert service.files().copy.call_args.kwargs["copyComments"] is True
+@pytest.mark.parametrize(
+    "kwargs, expected", [({"copy_comments": True}, True), ({}, False)]
+)
+async def test_copy_comments_reaches_files_copy(kwargs, expected):
+    assert (await _copy(**kwargs))["copyComments"] is expected
 
 
-@pytest.mark.asyncio
-async def test_copy_comments_defaults_to_false():
-    raw = _unwrap(copy_drive_file)
-    service = _service()
-    item_patch, folder_patch = _patch_resolvers()
-    with item_patch, folder_patch:
-        await raw(
-            service,
-            user_google_email="you@gmail.com",
-            file_id="file-1",
-        )
-    assert service.files().copy.call_args.kwargs["copyComments"] is False
+def test_drive_discovery_accepts_copy_comments():
+    service = build("drive", "v3", developerKey="test", static_discovery=True)
+    request = service.files().copy(fileId="file-1", body={}, copyComments=True)
+    assert "copyComments=true" in request.uri
