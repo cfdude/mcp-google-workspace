@@ -166,6 +166,8 @@ Each page lists every tool with its tier, parameters, required scopes, and examp
 
 You'll need an OAuth client from [Google Cloud Console](https://console.cloud.google.com/) in a project with the Google APIs enabled for the services you plan to use. The docs have [one-click enable links for every API](https://workspacemcp.com/docs?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=quickstart-enable-apis#authentication) plus a single `gcloud services enable` command that covers them all, and the [quick start guide](https://workspacemcp.com/quick-start?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=quickstart-inline) walks through the whole setup in about five minutes.
 
+> **Agentic OAuth clients:** this server only calls Google's REST APIs, so your OAuth client does not need Google's "Use this client for an AI-powered agent" setting. If your organization wants agent traffic labeled for admin controls, create a separate client with that setting enabled; it can't be changed on an existing client after November 12, 2026.
+
 <table>
 <tr>
 <td valign="top" width="50%">
