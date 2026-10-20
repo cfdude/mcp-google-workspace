@@ -1,10 +1,4 @@
-"""An entity-escaped HTML body must be rejected before anything is sent.
-
-A caller that writes "&lt;div&gt;...&lt;/div&gt;" into an html body means the
-markup; Gmail renders it as visible tags, so the recipient gets raw markup as
-text. The guard fails the call instead, which costs a retry rather than an
-unrecoverable send.
-"""
+"""Tests for rejecting an entity-escaped HTML body before send or draft."""
 
 import os
 import sys
@@ -16,11 +10,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from core.utils import UserInputError
-from gmail.gmail_tools import (
-    _reject_entity_escaped_html_body,
-    draft_gmail_message,
-    send_gmail_message,
-)
+from gmail.gmail_helpers import _reject_entity_escaped_html_body
+from gmail.gmail_tools import draft_gmail_message, send_gmail_message
 
 
 def _unwrap(tool):
@@ -63,6 +54,7 @@ def test_rejects_fully_escaped_html_body(body):
     with pytest.raises(UserInputError) as excinfo:
         _reject_entity_escaped_html_body(body, "html")
     assert "entity-escaped" in str(excinfo.value)
+    assert "'<p>...</p>'" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -70,20 +62,17 @@ def test_rejects_fully_escaped_html_body(body):
     [
         # Real markup: the normal html case.
         ('<div dir="rtl"><p>שלום</p></div>', "html"),
-        # Escaped tags shown as sample text inside a genuine html body: the
-        # body also carries real markup, so it is left alone.
+        # Escaped tags as sample text inside real markup.
         ('<p>Wrap it in &lt;div dir="rtl"&gt; like this.</p>', "html"),
         # Escaped tag mentioned mid-body rather than opening it.
         ("<p>Use &lt;br&gt; for a line break.</p>", "html"),
         ("<p>Use &#60;br&#62; for a line break.</p>", "html"),
         # Opens with an unrelated numeric reference, not an escaped '<'.
         ("&#169; 2025 Example", "html"),
-        # An escaped '<' followed by a word but no '>' or '&gt;' closing it is
-        # prose, not an escaped tag: whitespace alone does not end a tag.
+        # An escaped '<' with no closing '>' or '&gt;' is prose.
         ("&lt;hello world", "html"),
         ("&lt;b and c are both small", "html"),
-        # Same escaped body, but the caller asked for plain: the entities are
-        # then plausibly intentional and plain bodies are escaped downstream.
+        # Plain bodies are never checked.
         (ESCAPED_BODY, "plain"),
         # Plain-text body with no markup at all.
         ("Hi Idit,\n\nThanks for the note.", "html"),
@@ -136,8 +125,7 @@ async def test_draft_gmail_message_rejects_escaped_body(body):
     ids=["tag-name-then-spaces", "attribute-then-spaces"],
 )
 def test_unclosed_escaped_tag_is_matched_in_linear_time(body):
-    """A long escaped '<' with no closing delimiter must not backtrack
-    quadratically; it is prose, so it is allowed."""
+    """A long unclosed escaped '<' must not backtrack quadratically."""
     start = time.perf_counter()
     _reject_entity_escaped_html_body(body, "html")
     assert time.perf_counter() - start < 0.5
