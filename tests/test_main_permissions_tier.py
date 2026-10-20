@@ -165,7 +165,7 @@ def test_loopback_redirect_port_ignores_unusable_uris():
 
 @pytest.mark.parametrize("port_free", [True, False])
 def test_resolve_stdio_callback_port_binds_the_redirect_uris_port(
-    monkeypatch: pytest.MonkeyPatch, port_free: bool
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, port_free: bool
 ) -> None:
     monkeypatch.setattr(
         "auth.port_resolver._is_port_free", lambda host, port: port_free
@@ -178,10 +178,13 @@ def test_resolve_stdio_callback_port_binds_the_redirect_uris_port(
     )
     monkeypatch.setattr(main, "reload_oauth_config", lambda: None)
 
-    main.resolve_stdio_callback_port()
+    with caplog.at_level("WARNING", logger=main.logger.name):
+        main.resolve_stdio_callback_port()
 
     assert os.environ["WORKSPACE_MCP_PORT"] == "8103"
     assert os.environ["WORKSPACE_MCP_RESOLVED_PORT"] == "1"
+    assert ("GOOGLE_OAUTH_REDIRECT_URI" in caplog.text) is not port_free
+    assert "WORKSPACE_MCP_PORT_FALLBACK_COUNT" not in caplog.text
 
 
 def test_resolve_stdio_callback_port_survives_busy_port(

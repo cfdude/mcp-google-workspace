@@ -165,13 +165,19 @@ def resolve_stdio_callback_port() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     except NoAvailablePortError as exc:
-        logger.warning(
-            "%s Continuing; OAuth re-authorization will fail until the port frees up.",
-            exc,
-        )
         if pinned_port is None:
+            logger.warning(
+                "%s Continuing; OAuth re-authorization will fail until the port frees up.",
+                exc,
+            )
             os.environ.pop("WORKSPACE_MCP_RESOLVED_PORT", None)
         else:
+            logger.warning(
+                "OAuth callback port %d required by GOOGLE_OAUTH_REDIRECT_URI is in "
+                "use. Continuing; OAuth re-authorization will fail until the port "
+                "frees up or GOOGLE_OAUTH_REDIRECT_URI is changed.",
+                pinned_port,
+            )
             os.environ["WORKSPACE_MCP_PORT"] = str(pinned_port)
             os.environ["WORKSPACE_MCP_RESOLVED_PORT"] = "1"
     reload_oauth_config()
