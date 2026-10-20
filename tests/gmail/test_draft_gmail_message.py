@@ -2,6 +2,7 @@ import base64
 from email import policy
 from email.parser import BytesParser
 import os
+import ssl
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastmcp.exceptions import ToolError
 from googleapiclient.errors import HttpError
+import httplib2
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -290,6 +292,7 @@ async def test_draft_gmail_message_appends_gmail_signature_html():
 
     assert "<p>Hello</p>" in raw_text
     assert "Best,<br>Alice" in raw_text
+    assert "gmail_signature" in raw_text
 
 
 @pytest.mark.asyncio
@@ -887,6 +890,88 @@ async def test_draft_gmail_message_fetches_thread_once_when_quoting_reply():
 
 
 @pytest.mark.asyncio
+async def test_draft_gmail_message_quotes_html_reply_with_signature():
+    mock_service = _mock_gmail_service()
+    mock_service.users().drafts().create().execute.return_value = {"id": "draft_reply"}
+    mock_service.users().settings().sendAs().list().execute.return_value = {
+        "sendAs": [
+            {
+                "sendAsEmail": "user@example.com",
+                "isPrimary": True,
+                "signature": "<div>Best,<br>Alice</div>",
+            }
+        ]
+    }
+    mock_service.users().threads().get().execute.return_value = {
+        "messages": [
+            _thread_message(
+                "<msg1@example.com>",
+                from_value="Alice Example <alice@example.com>",
+                html="<p>Original html</p>",
+            )
+        ]
+    }
+
+    await _unwrap(draft_gmail_message)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        to="recipient@example.com",
+        subject="Meeting tomorrow",
+        body="<p>Thanks for the update.</p>",
+        body_format="html",
+        thread_id="thread123",
+        quote_original=True,
+        include_signature=True,
+    )
+
+    create_kwargs = (
+        mock_service.users.return_value.drafts.return_value.create.call_args.kwargs
+    )
+    html_body = (
+        _parse_raw_message(create_kwargs["body"]["message"]["raw"])
+        .get_body(preferencelist=("html",))
+        .get_content()
+    )
+
+    assert 'data-smartmail="gmail_signature"' in html_body
+    assert '<div class="gmail_quote">' in html_body
+
+
+@pytest.mark.asyncio
+async def test_draft_gmail_message_html_newlines_convert_body_not_quoted_original():
+    original_html = "<div>\n<span>Hello</span>\n<span>world</span>\n</div>"
+    mock_service = _mock_gmail_service()
+    mock_service.users().drafts().create().execute.return_value = {"id": "draft_reply"}
+    mock_service.users().threads().get().execute.return_value = {
+        "messages": [_thread_message("<msg1@example.com>", html=original_html)]
+    }
+
+    await _unwrap(draft_gmail_message)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        to="recipient@example.com",
+        subject="Meeting tomorrow",
+        body="Thanks,\n\nsee you there",
+        body_format="html",
+        thread_id="thread123",
+        quote_original=True,
+        include_signature=False,
+    )
+
+    create_kwargs = (
+        mock_service.users.return_value.drafts.return_value.create.call_args.kwargs
+    )
+    parsed = _parse_raw_message(create_kwargs["body"]["message"]["raw"])
+    # SMTP policy emits CRLF; compare against the LF the caller passed.
+    html_body = (
+        parsed.get_body(preferencelist=("html",)).get_content().replace("\r\n", "\n")
+    )
+
+    assert html_body.startswith("Thanks,<br><br>\nsee you there")
+    assert original_html in html_body
+
+
+@pytest.mark.asyncio
 async def test_draft_gmail_message_autofills_reply_headers_from_thread():
     mock_service = _mock_gmail_service()
     mock_service.users().drafts().create().execute.return_value = {"id": "draft_reply"}
@@ -912,8 +997,10 @@ async def test_draft_gmail_message_autofills_reply_headers_from_thread():
     )
     assert thread_get_kwargs["userId"] == "me"
     assert thread_get_kwargs["id"] == "thread123"
-    assert thread_get_kwargs["format"] == "metadata"
-    assert "Message-ID" in thread_get_kwargs["metadataHeaders"]
+    assert thread_get_kwargs["format"] == "full"
+    assert thread_get_kwargs["fields"] == (
+        "messages(labelIds,payload(headers,mimeType,parts(mimeType,parts(mimeType,parts))))"
+    )
 
     assert "Draft created! Draft ID: draft_reply" in result
 
@@ -1066,6 +1153,54 @@ async def test_draft_gmail_message_uses_selected_parent_rfc_ancestry(
 
     assert parsed["In-Reply-To"] == "<latest@example.com>"
     assert parsed["References"] == expected
+
+
+@pytest.mark.parametrize("reaction_depth", [0, 1, 2, 3, 5])
+@pytest.mark.asyncio
+async def test_draft_gmail_message_skips_emoji_reaction_as_reply_parent(reaction_depth):
+    mock_service = _mock_gmail_service()
+    mock_service.users().drafts().create().execute.return_value = {"id": "draft_reply"}
+    reaction = _thread_message(
+        "<reaction@example.com>",
+        in_reply_to="<latest@example.com>",
+        references="<root@example.com> <latest@example.com>",
+    )
+    reaction_part = {"mimeType": "text/vnd.google.email-reaction+json"}
+    for _ in range(reaction_depth):
+        reaction_part = {
+            "mimeType": "multipart/mixed",
+            "parts": [{"mimeType": "text/plain"}, reaction_part],
+        }
+    reaction["payload"].update(reaction_part)
+    mock_service.users().threads().get().execute.return_value = {
+        "messages": [
+            _thread_message("<root@example.com>"),
+            _thread_message(
+                "<latest@example.com>",
+                in_reply_to="<root@example.com>",
+                references="<root@example.com>",
+            ),
+            reaction,
+        ]
+    }
+
+    await _unwrap(draft_gmail_message)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        to="recipient@example.com",
+        subject="Meeting tomorrow",
+        body="Thanks for the update.",
+        thread_id="thread123",
+        include_signature=False,
+    )
+
+    create_kwargs = (
+        mock_service.users.return_value.drafts.return_value.create.call_args.kwargs
+    )
+    parsed = _parse_raw_message(create_kwargs["body"]["message"]["raw"])
+
+    assert parsed["In-Reply-To"] == "<latest@example.com>"
+    assert parsed["References"] == "<root@example.com> <latest@example.com>"
 
 
 @pytest.mark.asyncio
@@ -1844,6 +1979,175 @@ async def test_send_gmail_message_requires_to_when_forwarding():
 
 
 @pytest.mark.asyncio
+async def test_draft_gmail_message_forward_creates_draft_instead_of_sending():
+    mock_service = _mock_gmail_service()
+    mock_service.users().messages().get().execute.return_value = {
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": "Quarterly"},
+                {"name": "From", "value": "alice@example.com"},
+            ],
+            "body": {"data": base64.urlsafe_b64encode(b"Numbers inside.").decode()},
+        }
+    }
+    mock_service.users().drafts().create().execute.return_value = {"id": "draft123"}
+
+    result = await _unwrap(draft_gmail_message)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        to="recipient@example.com",
+        body="FYI - see below.",
+        forward_message_id="abc123",
+    )
+
+    assert result == "Forward draft created! Draft ID: draft123"
+    mock_service.users().messages().send().execute.assert_not_called()
+    raw = (
+        mock_service.users().drafts().create.call_args.kwargs["body"]["message"]["raw"]
+    )
+    drafted = BytesParser(policy=policy.default).parsebytes(
+        base64.urlsafe_b64decode(raw)
+    )
+    assert drafted["Subject"] == "Fwd: Quarterly"
+    assert drafted["To"] == "recipient@example.com"
+    assert "FYI - see below." in drafted.get_body().get_content()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("from_email", [None, "explicit@example.com"])
+async def test_forward_draft_selects_send_as_identity(from_email):
+    service = _mock_gmail_service()
+    service.users().settings().sendAs().list().execute.return_value = (
+        _default_alias_send_as_response()
+    )
+    service.users().messages().get().execute.return_value = _thread_message(
+        "original", text="Original body"
+    )
+    service.users().settings().sendAs().list.reset_mock()
+
+    await _unwrap(draft_gmail_message)(
+        service=service,
+        user_google_email="primary@example.com",
+        forward_message_id="original",
+        from_email=from_email,
+    )
+
+    raw = service.users().drafts().create.call_args.kwargs["body"]["message"]["raw"]
+    drafted = _parse_raw_message(raw)
+    assert drafted["From"] == (from_email or "default.alias@example.com")
+    assert "signature" not in drafted.get_body().get_content()
+    if from_email:
+        service.users().settings().sendAs().list.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [draft_gmail_message, send_gmail_message])
+@pytest.mark.parametrize("include_original", [True, False])
+async def test_forward_includes_caller_attachments(tool, include_original, monkeypatch):
+    service = _mock_gmail_service()
+    original = _thread_message("original", text="Original body")
+    original["payload"]["parts"].append(
+        {
+            "filename": "original.txt",
+            "mimeType": "text/plain",
+            "body": {"attachmentId": "att1", "size": 8},
+        }
+    )
+    service.users().messages().get().execute.return_value = original
+    service.users().messages().attachments().get().execute.return_value = {
+        "data": _encode_part("original")
+    }
+    service.users().messages().attachments().get.reset_mock()
+    monkeypatch.setattr(
+        gmail_tools,
+        "ssrf_safe_stream",
+        _mock_stream_response(_FakeStreamResponse(chunks=[b"downloaded"])),
+    )
+
+    result = await _unwrap(tool)(
+        service=service,
+        user_google_email="user@example.com",
+        to="recipient@example.com",
+        forward_message_id="original",
+        include_forwarded_attachments=include_original,
+        attachments=[
+            {"url": "https://example.com/extra.txt"},
+            {
+                "filename": "inline.txt",
+                "content": base64.b64encode(b"inline").decode(),
+            },
+        ],
+    )
+
+    if tool is draft_gmail_message:
+        raw = service.users().drafts().create.call_args.kwargs["body"]["message"]["raw"]
+        service.users().messages().send().execute.assert_not_called()
+    else:
+        raw = service.users().messages().send.call_args.kwargs["body"]["raw"]
+        service.users().drafts().create.assert_not_called()
+    files = {
+        part.get_filename(): part.get_payload(decode=True)
+        for part in _parse_raw_message(raw).iter_attachments()
+    }
+    expected = {"extra.txt": b"downloaded", "inline.txt": b"inline"}
+    if include_original:
+        expected["original.txt"] = b"original"
+    else:
+        service.users().messages().attachments().get.assert_not_called()
+    assert files == expected
+    assert f"with {len(expected)} attachment(s)" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [draft_gmail_message, send_gmail_message])
+@pytest.mark.parametrize("failure", ["url", "content"])
+async def test_forward_attachment_failure_prevents_write(tool, failure, monkeypatch):
+    service = _mock_gmail_service()
+    service.users().messages().get().execute.return_value = _thread_message(
+        "original", text="Original body"
+    )
+
+    async def fail_download(url):
+        raise ValueError("download failed")
+
+    monkeypatch.setattr(gmail_tools, "_download_attachment_bytes", fail_download)
+    invalid = (
+        {"url": "https://example.com/bad.txt"}
+        if failure == "url"
+        else {"filename": "bad.txt", "content": "a"}
+    )
+    with pytest.raises(UserInputError, match="Failed to include requested attachment"):
+        await _unwrap(tool)(
+            service=service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            forward_message_id="original",
+            attachments=[
+                {"filename": "good.txt", "content": base64.b64encode(b"good").decode()},
+                invalid,
+            ],
+        )
+
+    service.users().drafts().create.assert_not_called()
+    service.users().messages().send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_draft_gmail_message_requires_subject_and_body_unless_forwarding():
+    mock_service = _mock_gmail_service()
+
+    with pytest.raises(UserInputError, match="'subject' and 'body' are required"):
+        await _unwrap(draft_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            body="Hi there!",
+        )
+
+    mock_service.users.return_value.drafts.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_send_gmail_message_does_not_fetch_thread_for_a_new_message():
     mock_service = _mock_gmail_service()
     mock_service.users().messages().send().execute.return_value = {"id": "sent123"}
@@ -1859,3 +2163,159 @@ async def test_send_gmail_message_does_not_fetch_thread_for_a_new_message():
     )
 
     assert mock_service.users.return_value.threads.return_value.get.call_count == 0
+    mock_service.users().messages().send.return_value.execute.assert_called_once_with(
+        num_retries=0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        HttpError(resp=SimpleNamespace(status=503, reason="Unavailable"), content=b""),
+        ssl.SSLError("record layer failure"),
+        ConnectionResetError("reset by peer"),
+        TimeoutError("timed out"),
+        httplib2.FailedToDecompressContent("bad gzip", {}, b""),
+    ],
+)
+async def test_send_gmail_message_reports_unknown_delivery_on_ambiguous_failure(
+    error,
+):
+    mock_service = _mock_gmail_service()
+    mock_service.users().messages().send().execute.side_effect = error
+
+    with pytest.raises(ToolError, match="Check the Sent folder before sending again"):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_an_unreached_server():
+    mock_service = _mock_gmail_service()
+    unreached = httplib2.ServerNotFoundError("Unable to find the server")
+    mock_service.users().messages().send().execute.side_effect = unreached
+
+    with pytest.raises(httplib2.ServerNotFoundError):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_passes_through_a_rejected_send():
+    mock_service = _mock_gmail_service()
+    rejected = HttpError(
+        resp=SimpleNamespace(status=400, reason="Invalid To header"), content=b""
+    )
+    mock_service.users().messages().send().execute.side_effect = rejected
+
+    with pytest.raises(HttpError) as excinfo:
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there!",
+            include_signature=False,
+        )
+
+    assert excinfo.value is rejected
+
+
+def _thread_lookup_error(status, reason):
+    return HttpError(
+        resp=SimpleNamespace(status=status, reason=reason),
+        content=b'{"error":{"message":"' + reason.encode() + b'"}}',
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,reason",
+    [
+        (400, "Invalid id value"),  # e.g. the FMfcg... token from a Gmail web URL
+        (404, "Requested entity was not found."),  # well-formed but unknown
+    ],
+)
+async def test_draft_gmail_message_rejects_an_unresolvable_thread_id(status, reason):
+    """A thread_id Gmail rejects must fail loudly, not yield an orphan draft.
+
+    Previously the lookup error was swallowed, no reply headers could be
+    derived, threadId was therefore left off the request, and the tool reported
+    "Draft created!" for a standalone draft with no recipient and no subject.
+    """
+    mock_service = _mock_gmail_service()
+    mock_service.users().threads().get().execute.side_effect = _thread_lookup_error(
+        status, reason
+    )
+    mock_service.users().drafts().create.reset_mock()
+
+    with pytest.raises(UserInputError, match="not a valid Gmail API") as excinfo:
+        await _unwrap(draft_gmail_message)(
+            service=mock_service,
+            user_google_email="primary@example.com",
+            subject="",  # blank -> derive "Re: ..." from the thread, as a reply would
+            body="Test 1",
+            thread_id="FMfcgzBCDFGHJKLMNPQRSTVWXZbcdfgh",
+        )
+
+    # Nothing was written, and the advice names tools that can supply the ID.
+    mock_service.users().drafts().create.assert_not_called()
+    assert "search_gmail_messages" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_draft_gmail_message_keeps_the_soft_fallback_for_transient_errors():
+    """A 5xx on the thread lookup is NOT the caller's fault: the existing
+    behaviour (warn, fall back to an unthreaded draft) is deliberately kept."""
+    mock_service = _mock_gmail_service()
+    mock_service.users().threads().get().execute.side_effect = _thread_lookup_error(
+        503, "Backend Error"
+    )
+    mock_service.users().drafts().create().execute.return_value = {"id": "draft_x"}
+
+    result = await _unwrap(draft_gmail_message)(
+        service=mock_service,
+        user_google_email="primary@example.com",
+        to="recipient@example.com",
+        subject="Re: hello",
+        body="Body",
+        thread_id="18c2f3a4b5d6e7f8",
+    )
+
+    assert "draft_x" in result
+
+
+@pytest.mark.asyncio
+async def test_send_gmail_message_rejects_an_unresolvable_thread_id():
+    """The send path shares the helper, so it gets the same clear error before
+    anything is sent."""
+    mock_service = _mock_gmail_service()
+    mock_service.users().threads().get().execute.side_effect = _thread_lookup_error(
+        400, "Invalid id value"
+    )
+    mock_service.users().messages().send.reset_mock()
+
+    with pytest.raises(UserInputError, match="not a valid Gmail API"):
+        await _unwrap(send_gmail_message)(
+            service=mock_service,
+            user_google_email="primary@example.com",
+            to="recipient@example.com",
+            subject="Re: hello",
+            body="Body",
+            thread_id="FMfcgzBCDFGHJKLMNPQRSTVWXZbcdfgh",
+        )
+
+    mock_service.users().messages().send.assert_not_called()
