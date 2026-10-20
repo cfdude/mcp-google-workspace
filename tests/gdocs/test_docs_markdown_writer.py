@@ -61,15 +61,13 @@ def test_h1_emits_insert_and_heading_style():
     assert inserts[0]["insertText"]["text"] == "My Title\n"
     assert inserts[1]["insertText"]["text"] == "\n"
     assert inserts[1]["insertText"]["location"]["index"] == 1 + len("My Title\n")
-    assert len(styles) == 1
-    assert (
-        styles[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"]
-        == "HEADING_1"
-    )
-    # Range should cover the heading text (not the spacer)
-    rng = styles[0]["updateParagraphStyle"]["range"]
-    assert rng["startIndex"] == 1
-    assert rng["endIndex"] == 1 + len("My Title\n")
+    assert len(styles) == 2
+    heading_style = styles[0]["updateParagraphStyle"]
+    assert heading_style["paragraphStyle"]["namedStyleType"] == "HEADING_1"
+    assert heading_style["range"]["startIndex"] == 1
+    assert heading_style["range"]["endIndex"] == 1 + len("My Title\n")
+    spacer_style = styles[1]["updateParagraphStyle"]
+    assert spacer_style["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
 
 
 def test_h2_h3_h4_h5_h6_all_emit_correct_named_style():
@@ -77,10 +75,19 @@ def test_h2_h3_h4_h5_h6_all_emit_correct_named_style():
         hashes = "#" * level
         md = f"{hashes} Heading L{level}"
         requests = markdown_to_docs_requests(md)
-        styles = [r for r in requests if "updateParagraphStyle" in r]
-        assert len(styles) == 1
+        heading_styles = [
+            r
+            for r in requests
+            if "updateParagraphStyle" in r
+            and r["updateParagraphStyle"]["paragraphStyle"]
+            .get("namedStyleType", "")
+            .startswith("HEADING_")
+        ]
+        assert len(heading_styles) == 1
         assert (
-            styles[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"]
+            heading_styles[0]["updateParagraphStyle"]["paragraphStyle"][
+                "namedStyleType"
+            ]
             == f"HEADING_{level}"
         )
 
@@ -339,3 +346,66 @@ def test_paragraph_between_blocks_has_spacers_around_it():
     texts = [r["insertText"]["text"] for r in inserts]
     # Heading, spacer, paragraph, spacer
     assert texts == ["Title\n", "\n", "Body text\n", "\n"]
+
+
+def test_body_paragraph_emits_normal_text_reset():
+    """Body paragraph and its spacer are both reset to NORMAL_TEXT."""
+    requests = markdown_to_docs_requests("Plain body paragraph.")
+    normal_resets = [
+        r
+        for r in requests
+        if "updateParagraphStyle" in r
+        and r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType")
+        == "NORMAL_TEXT"
+    ]
+    assert len(normal_resets) == 2
+    body_reset = normal_resets[0]["updateParagraphStyle"]["range"]
+    assert body_reset["startIndex"] == 1
+    assert body_reset["endIndex"] == 1 + len("Plain body paragraph.\n")
+
+
+def test_heading_followed_by_body_has_normal_reset_between():
+    """Spacer and body after a heading are each reset to NORMAL_TEXT."""
+    requests = markdown_to_docs_requests("# Heading\n\nBody paragraph.")
+    para_styles = [r for r in requests if "updateParagraphStyle" in r]
+    named_types = [
+        r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType")
+        for r in para_styles
+    ]
+    assert named_types == [
+        "HEADING_1",
+        "NORMAL_TEXT",
+        "NORMAL_TEXT",
+        "NORMAL_TEXT",
+    ]
+
+
+def test_list_items_reset_to_normal_text_before_bullets():
+    """List item paragraphs are reset to NORMAL_TEXT before bullets apply."""
+    requests = markdown_to_docs_requests("- One\n- Two", start_index=10)
+    kinds = [next(iter(r)) for r in requests]
+    reset = requests[kinds.index("updateParagraphStyle")]["updateParagraphStyle"]
+    assert reset["paragraphStyle"] == {"namedStyleType": "NORMAL_TEXT"}
+    assert reset["range"] == {"startIndex": 10, "endIndex": 10 + len("One\nTwo\n")}
+    assert kinds.index("updateParagraphStyle") < kinds.index("createParagraphBullets")
+
+
+def test_fenced_code_resets_to_normal_text():
+    requests = markdown_to_docs_requests("```\ncode\n```")
+    styles = [
+        r["updateParagraphStyle"] for r in requests if "updateParagraphStyle" in r
+    ]
+    assert styles[0]["range"] == {"startIndex": 1, "endIndex": 1 + len("code\n")}
+    assert styles[0]["paragraphStyle"] == {"namedStyleType": "NORMAL_TEXT"}
+
+
+def test_blockquote_sets_named_style_and_indent_in_one_request():
+    """namedStyleType shares the indent request so it cannot clobber the indent."""
+    requests = markdown_to_docs_requests("> quoted")
+    quote_style = next(
+        r["updateParagraphStyle"]
+        for r in requests
+        if "indentStart" in r.get("updateParagraphStyle", {}).get("paragraphStyle", {})
+    )
+    assert quote_style["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
+    assert quote_style["fields"] == "namedStyleType,indentStart"
