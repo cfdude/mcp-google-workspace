@@ -274,6 +274,56 @@ async def test_populate_tab_append_starts_a_new_paragraph(last_start, first_inse
     assert min(styled) == first_insert_at
 
 
+@pytest.mark.asyncio
+async def test_populate_tab_append_after_list_item_drops_inherited_bullet():
+    service = Mock()
+    docs = service.documents.return_value
+    docs.get.return_value.execute.return_value = {
+        "tabs": [
+            {
+                "tabProperties": {"tabId": "t.a"},
+                "documentTab": {
+                    "body": {
+                        "content": [
+                            {"endIndex": 1},
+                            {
+                                "startIndex": 1,
+                                "endIndex": 7,
+                                "paragraph": {"bullet": {"listId": "kix.list"}},
+                            },
+                        ]
+                    }
+                },
+            }
+        ]
+    }
+    docs.batchUpdate.return_value.execute.return_value = {"replies": []}
+
+    await _unwrap(docs_tools.manage_doc_tab)(
+        service=service,
+        user_google_email="test@example.com",
+        document_id="doc-abc",
+        action="populate_from_markdown",
+        tab_id="t.a",
+        markdown_text="After",
+        replace_existing=False,
+    )
+
+    requests = docs.batchUpdate.call_args.kwargs["body"]["requests"]
+    assert requests[0] == {
+        "insertText": {"text": "\n", "location": {"index": 6, "tabId": "t.a"}}
+    }
+    assert requests[1] == {
+        "deleteParagraphBullets": {
+            "range": {"startIndex": 7, "endIndex": 8, "tabId": "t.a"}
+        }
+    }
+    assert requests[2]["insertText"] == {
+        "text": "After\n",
+        "location": {"index": 7, "tabId": "t.a"},
+    }
+
+
 def test_find_tab_last_element_treats_non_document_tab_as_not_found():
     doc = {
         "tabs": [

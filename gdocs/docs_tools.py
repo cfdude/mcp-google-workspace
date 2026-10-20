@@ -3071,11 +3071,18 @@ async def manage_doc_tab(
         # Append after existing content instead of prepending at index 1.
         insert_at = tab_end - 1 if tab_end > 2 else 1
         opens_paragraph = last_element.get("startIndex", insert_at) < insert_at
+        content_start = insert_at + opens_paragraph
         markdown_requests = markdown_to_docs_requests(
-            markdown_text, tab_id=tab_id, start_index=insert_at + opens_paragraph
+            markdown_text, tab_id=tab_id, start_index=content_start
         )
         if markdown_requests and opens_paragraph:
             all_requests.append(create_insert_text_request(insert_at, "\n", tab_id))
+        if markdown_requests and "bullet" in last_element.get("paragraph", {}):
+            all_requests.append(
+                create_delete_bullet_list_request(
+                    content_start, content_start + 1, tab_id
+                )
+            )
         all_requests.extend(markdown_requests)
 
     if not all_requests:
