@@ -5,11 +5,14 @@ without attachments.
 
 import base64
 import json
-import pathlib
-import sys
 import os
-import pytest
+import pathlib
+import re
+import sys
+from email import message_from_bytes
 from unittest.mock import Mock
+
+import pytest
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -192,8 +195,6 @@ async def test_forward_subject_prefixed():
         to="r@example.com",
         user_google_email="me@example.com",
     )
-    from email import message_from_bytes
-
     sent = message_from_bytes(_decode_sent_raw(svc))
     assert sent["Subject"] == "Fwd: Meeting Notes"
 
@@ -210,8 +211,6 @@ async def test_forward_subject_override_respected():
         subject="My Custom Subject",
         user_google_email="me@example.com",
     )
-    from email import message_from_bytes
-
     sent = message_from_bytes(_decode_sent_raw(svc))
     assert sent["Subject"] == "My Custom Subject"
 
@@ -227,8 +226,6 @@ async def test_forward_subject_no_double_prefix():
         to="r@example.com",
         user_google_email="me@example.com",
     )
-    from email import message_from_bytes
-
     sent = message_from_bytes(_decode_sent_raw(svc))
     assert sent["Subject"] == "Fwd: Already forwarded"
 
@@ -262,6 +259,28 @@ async def test_forward_plain_only_original_has_valid_html_part():
 
 
 @pytest.mark.asyncio
+async def test_forward_crlf_plain_original_and_note_emit_no_bare_cr():
+    """Gmail returns CRLF plain bodies; splitting them on LF for the HTML part
+    must not leave a lone CR on the wire (RFC 5322 forbids it)."""
+    msg = _create_mock_message(text_body="Line one.\r\nLine two.", html_body=None)
+    svc = _create_mock_service(msg)
+
+    await _forward_gmail_message_impl(
+        service=svc,
+        message_id="msg_crlf",
+        to="recipient@example.com",
+        forward_message="Note one.\r\nNote two.",
+        user_google_email="me@example.com",
+    )
+
+    raw = _decode_sent_raw(svc)
+    assert re.search(rb"\r(?!\n)", raw) is None
+    html_part = message_from_bytes(raw).get_payload()[1]
+    html = html_part.get_payload(decode=True).decode("utf-8")
+    assert "Line one." in html and "Line two." in html
+
+
+@pytest.mark.asyncio
 async def test_forward_attachment_download_failure_raises():
     """A failed attachment download must abort rather than send a partial forward."""
     msg = _create_mock_message(
@@ -292,8 +311,6 @@ async def test_forward_attachment_download_failure_raises():
 async def test_forward_html_note_newlines_converted_but_original_untouched():
     """Bare newlines in an HTML note become <br>; the forwarded original keeps its
     markup byte-for-byte."""
-    from email import message_from_bytes
-
     original_html = "<div>\n<span>Hello</span>\n<span>world</span>\n</div>"
     msg = _create_mock_message(text_body="Hello world", html_body=original_html)
     svc = _create_mock_service(msg)
@@ -321,8 +338,6 @@ async def test_forward_html_note_newlines_converted_but_original_untouched():
 async def test_forward_html_note_placement():
     """HTML-format note appears before the gmail_quote_container div in HTML and
     before the forwarded separator in plain."""
-    from email import message_from_bytes
-
     msg = _create_mock_message(
         text_body="Lorem ipsum original plain.",
         html_body="<div>Lorem ipsum original html.</div>",
@@ -375,8 +390,6 @@ async def test_forward_html_note_placement():
 async def test_forward_no_note_plain_only_original():
     """No note + plain-only original → valid multipart/alternative with both parts;
     HTML contains gmail_quote_container with no leading note div."""
-    from email import message_from_bytes
-
     msg = _create_mock_message(
         text_body="Just plain body. No html original.",
         html_body=None,
@@ -425,8 +438,6 @@ async def test_forward_no_note_plain_only_original():
 @pytest.mark.asyncio
 async def test_forward_html_note_plain_keeps_paragraph_breaks():
     """An HTML note's text/plain rendering keeps block boundaries."""
-    from email import message_from_bytes
-
     msg = _create_mock_message(
         text_body="Lorem ipsum original plain.",
         html_body="<div>Lorem ipsum original html.</div>",

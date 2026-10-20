@@ -20,7 +20,7 @@ from datetime import datetime
 from email.header import Header
 from email.errors import HeaderParseError, InvalidHeaderDefect
 from email.headerregistry import HeaderRegistry
-from email.utils import formataddr
+from email.utils import formataddr, getaddresses
 from typing import List, Optional, Tuple
 
 
@@ -205,14 +205,19 @@ def new_message_html(body_html: str, direction: str = "ltr") -> str:
     return f'<div dir="{direction}">{body_html}</div>'
 
 
-def _format_attribution_when(dt: datetime) -> str:
-    """Format the ``On <Dow>, <D> <Mon> <YYYY> at <H>:<MM>`` clause.
+def format_gmail_date(dt: datetime) -> str:
+    """Format ``<Dow>, <D> <Mon> <YYYY> at <H>:<MM>`` as Gmail web renders dates.
 
     Day and hour are NOT zero-padded; minute IS zero-padded.
     """
     dow = _DOW[dt.weekday()]
     mon = _MON[dt.month - 1]
-    return f"On {dow}, {dt.day} {mon} {dt.year} at {dt.hour}:{dt.minute:02d}"
+    return f"{dow}, {dt.day} {mon} {dt.year} at {dt.hour}:{dt.minute:02d}"
+
+
+def _format_attribution_when(dt: datetime) -> str:
+    """Format the ``On <Dow>, <D> <Mon> <YYYY> at <H>:<MM>`` clause."""
+    return f"On {format_gmail_date(dt)}"
 
 
 def format_attribution_plain(name: str, email: str, dt: datetime) -> str:
@@ -273,8 +278,6 @@ def render_forward_recipients_html(raw_header: str) -> str:
     carries a display name, or a bare ``<a href="mailto:addr">addr</a>`` when it does
     not (matching Gmail's forwarded To: rendering). Names and addresses are HTML-escaped.
     """
-    from email.utils import getaddresses
-
     parts = []
     for name, email in getaddresses([raw_header or ""]):
         if not email:
@@ -305,7 +308,7 @@ def build_forwarded_container_html(
 
     Args:
         from_name: Sender display name; empty/whitespace → bare-email rendering.
-        from_email: Sender email address.
+        from_email: Sender email address; empty → name only, with no mailto link.
         date_str: Pre-formatted date string (passed through verbatim).
         subject: Email subject (HTML-escaped by this function).
         to_rendered: Pre-rendered recipient HTML (inserted verbatim).
@@ -314,24 +317,23 @@ def build_forwarded_container_html(
     Returns:
         A string containing the full forwarded container div.
     """
-    safe_email = _html.escape(from_email)
-    safe_subject = _escape_body(subject)
-
+    from_fields = []
     if from_name and from_name.strip():
-        safe_name = _escape_body(from_name)
-        from_field = (
-            f'<strong class="gmail_sendername" dir="auto">{safe_name}</strong> '
+        from_fields.append(
+            f'<strong class="gmail_sendername" dir="auto">{_escape_body(from_name)}</strong>'
+        )
+    if from_email:
+        safe_email = _html.escape(from_email)
+        from_fields.append(
             f'<span dir="auto">&lt;<a href="mailto:{safe_email}">{safe_email}</a>&gt;</span>'
         )
-    else:
-        from_field = f'<span dir="auto">&lt;<a href="mailto:{safe_email}">{safe_email}</a>&gt;</span>'
 
     attr_div = (
         '<div dir="ltr" class="gmail_attr">'
         "---------- Forwarded message ---------<br>"
-        f"From: {from_field}<br>"
+        f"From: {' '.join(from_fields)}<br>"
         f"Date: {_escape_body(date_str)}<br>"
-        f"Subject: {safe_subject}<br>"
+        f"Subject: {_escape_body(subject)}<br>"
         f"To: {to_rendered}<br>"
         "</div>"
     )
@@ -355,7 +357,7 @@ def build_forwarded_plain(
 
     Args:
         from_name: Sender display name; empty/whitespace → bare email only.
-        from_email: Sender email address.
+        from_email: Sender email address; empty → name only.
         date_str: Pre-formatted date string.
         subject: Email subject (not escaped - plain text context).
         to_rendered_plain: Pre-rendered plain-text recipient string.
@@ -365,7 +367,7 @@ def build_forwarded_plain(
         A plain-text string with the forwarded message structure.
     """
     if from_name and from_name.strip():
-        from_field = f"{from_name} <{from_email}>"
+        from_field = f"{from_name} <{from_email}>" if from_email else from_name
     else:
         from_field = from_email
 
@@ -383,12 +385,13 @@ def build_forwarded_plain(
 def _qp_encode(text: str) -> str:
     """Quoted-printable encode text with CRLF line endings (76-col soft wrap)."""
     # Normalize to CRLF so quopri's soft-wrapping operates on canonical lines.
-    raw = text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
-    encoded = quopri.encodestring(raw).decode("ascii")
+    # quopri passes a bare CR through unencoded, so it becomes a line break too
+    # (as EmailMessage does) rather than an RFC 5322-invalid lone CR on the wire.
+    lines = text.replace("\r\n", "\n").replace("\r", "\n")
+    encoded = quopri.encodestring(lines.replace("\n", "\r\n").encode("utf-8"))
     # binascii.b2a_qp emits bare-LF soft breaks ("=\n") when the input has no
-    # CRLF to imitate (a single-line HTML part). A data CR is always encoded as
-    # =0D, so every raw LF is a line ending and can be canonicalized to CRLF.
-    return encoded.replace("\r\n", "\n").replace("\n", "\r\n")
+    # CRLF to imitate (a single-line HTML part); canonicalize those to CRLF.
+    return encoded.decode("ascii").replace("\r\n", "\n").replace("\n", "\r\n")
 
 
 def choose_cte(text: str) -> str:

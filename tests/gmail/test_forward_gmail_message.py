@@ -11,6 +11,8 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from fastmcp.exceptions import ToolError
+
 from gmail.gmail_tools import _forward_gmail_message_impl
 from core.utils import UserInputError
 
@@ -161,6 +163,9 @@ async def test_forward_simple_text_email():
     assert "Email forwarded" in result
     assert "fwd001" in result
     mock_service.users().messages().send.assert_called()
+    mock_service.users().messages().send.return_value.execute.assert_called_once_with(
+        num_retries=0
+    )
 
     sent = get_sent_mime_message(mock_service)
     assert sent["Subject"] == "Fwd: Hello"
@@ -172,6 +177,28 @@ async def test_forward_simple_text_email():
     assert "This is the body." in body
     assert "Forwarded message" in body
     assert "alice@example.com" in body
+
+
+@pytest.mark.asyncio
+async def test_forward_reports_unknown_delivery_on_ambiguous_failure():
+    message = create_mock_message(
+        subject="Hello",
+        from_addr="alice@example.com",
+        to_addr="bob@example.com",
+        text_body="This is the body.",
+    )
+    mock_service = create_mock_service(message)
+    mock_service.users().messages().send().execute.side_effect = ConnectionResetError(
+        "reset by peer"
+    )
+
+    with pytest.raises(ToolError, match="Check the Sent folder before sending again"):
+        await _forward_gmail_message_impl(
+            service=mock_service,
+            message_id="msg123",
+            to="recipient@example.com",
+            user_google_email="me@example.com",
+        )
 
 
 @pytest.mark.asyncio
@@ -327,6 +354,84 @@ async def test_forward_no_note_honors_explicit_direction(direction):
     sent = get_sent_mime_message(mock_service)
     body = get_body_text(sent, subtype="html")
     assert body.startswith(f'<div dir="{direction}">')
+
+
+@pytest.mark.asyncio
+async def test_forward_explicit_direction_overrides_note_container():
+    """An explicit direction wins over the HTML note's own dir, as on a regular send."""
+    message = create_mock_message(text_body="Original message body.")
+    mock_service = create_mock_service(message, sent_message_id="fwddir")
+
+    await _forward_gmail_message_impl(
+        service=mock_service,
+        message_id="msg789",
+        to="recipient@example.com",
+        forward_message='<div dir="ltr">See below.</div>',
+        forward_message_format="html",
+        user_google_email="me@example.com",
+        direction="rtl",
+    )
+
+    body = get_body_text(get_sent_mime_message(mock_service), subtype="html")
+    assert body.startswith('<div dir="rtl"><div dir="rtl">See below.</div>')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("date", "expected"),
+    [
+        ("Sat, 28 Mar 2026 09:05:00 -0400", "Sat, 28 Mar 2026 at 9:05"),
+        ("sometime last week", "sometime last week"),
+    ],
+)
+async def test_forward_header_formats_date_like_gmail(date, expected):
+    """The forwarded Date line uses Gmail's format in the sender's own offset;
+    an unparseable Date passes through verbatim."""
+    message = create_mock_message(date=date, text_body="Original message body.")
+    mock_service = create_mock_service(message)
+
+    await _forward_gmail_message_impl(
+        service=mock_service,
+        message_id="msg789",
+        to="recipient@example.com",
+        user_google_email="me@example.com",
+    )
+
+    sent = get_sent_mime_message(mock_service)
+    assert f"Date: {expected}\r\n" in get_body_text(sent, subtype="plain")
+    assert f"Date: {expected}<br>" in get_body_text(sent, subtype="html")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("from_header", "expected_from"),
+    [(None, "(unknown sender)"), ("Undisclosed sender", "Undisclosed sender")],
+)
+async def test_forward_header_without_sender_address(from_header, expected_from):
+    """A From with no usable address renders as text, never a dead mailto link."""
+    message = create_mock_message(text_body="Original message body.")
+    headers = message["payload"]["headers"]
+    headers[:] = [h for h in headers if h["name"] not in ("From", "Date")]
+    if from_header:
+        headers.append({"name": "From", "value": from_header})
+    mock_service = create_mock_service(message)
+
+    await _forward_gmail_message_impl(
+        service=mock_service,
+        message_id="msg789",
+        to="recipient@example.com",
+        user_google_email="me@example.com",
+    )
+
+    sent = get_sent_mime_message(mock_service)
+    plain = get_body_text(sent, subtype="plain")
+    html_body = get_body_text(sent, subtype="html")
+    assert f"From: {expected_from}\r\nDate: (unknown date)\r\n" in plain
+    assert (
+        f'From: <strong class="gmail_sendername" dir="auto">{expected_from}'
+        in html_body
+    )
+    assert "mailto:" not in html_body.split("To:")[0]
 
 
 @pytest.mark.asyncio
