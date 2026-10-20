@@ -333,11 +333,7 @@ def _compute_scope_fingerprint() -> str:
 
 
 def get_allowed_hosts() -> Optional[frozenset[str]]:
-    """Parse WORKSPACE_MCP_ALLOWED_HOSTS; unset accepts any Host header.
-
-    Invalid values raise instead of falling back, so a misconfigured deployment
-    fails at startup.
-    """
+    """Parse WORKSPACE_MCP_ALLOWED_HOSTS; None when unset, ValueError when invalid."""
     raw = os.getenv(_ALLOWED_HOSTS_ENV, "").strip()
     if not raw:
         return None
