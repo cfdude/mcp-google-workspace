@@ -111,7 +111,7 @@ Move rows from one sheet to another within the same spreadsheet. Preserves formu
 ## Formatting
 
 ### format_sheet_range
-Apply visual formatting to a range: colors, number formats, text wrapping, alignment, text styling, borders, and dropdown lists.
+Apply visual formatting to a range: colors, number formats, text wrapping, alignment, text styling, cell merging, borders, and dropdown lists.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
@@ -128,6 +128,8 @@ Apply visual formatting to a range: colors, number formats, text wrapping, align
 | bold | boolean | no | | |
 | italic | boolean | no | | |
 | font_size | integer | no | | Size in points |
+| merge_cells | boolean | no | | `true` to merge, `false` to unmerge; merging keeps only the top-left value |
+| merge_type | string | no | | `MERGE_ALL` (default when merging), `MERGE_COLUMNS`, or `MERGE_ROWS`; implies a merge |
 | borders | string | no | | Sides to draw, comma-separated: `all`, `outer`, `inner`, `top`, `bottom`, `left`, `right`, `inner_horizontal`, `inner_vertical`. `none` removes all borders |
 | border_style | string | no | `SOLID` | `SOLID`, `SOLID_MEDIUM`, `SOLID_THICK`, `DASHED`, `DOTTED`, `DOUBLE`. Requires `borders` |
 | border_color | string | no | `#000000` | Hex `#RRGGBB`. Requires `borders` |
@@ -192,6 +194,7 @@ Create, reply to, or resolve a comment.
 | action | string | yes | | `create`, `reply`, or `resolve` |
 | comment_content | string | for create/reply | | Comment text |
 | comment_id | string | for reply/resolve | | Target comment ID |
+| cell | string | no | | Single cell in A1 notation (e.g. `Sheet1!B2`) to anchor a `create` comment to. Omit for a file-level comment |
 
 ---
 
