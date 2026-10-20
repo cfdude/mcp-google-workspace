@@ -25,23 +25,18 @@ def _build_session_context(request: Request) -> Optional[SessionContext]:
     headers = dict(request.headers)
     session_id = extract_session_from_headers(headers)
 
-    # Try to get OAuth 2.1 auth context from FastMCP
     auth_context = None
     user_email = None
     mcp_session_id = None
     if hasattr(request.state, "auth"):
         auth_context = request.state.auth
-        # Extract user email from auth claims if available
+        # SECURITY: user_email must come from verified FastMCP auth, never a raw JWT.
         if hasattr(auth_context, "claims") and auth_context.claims:
             user_email = auth_context.claims.get("email")
 
-    # Check for FastMCP session ID (from streamable HTTP transport)
     if hasattr(request.state, "session_id"):
         mcp_session_id = request.state.session_id
         logger.debug(f"Found FastMCP session ID: {mcp_session_id}")
-
-    # SECURITY: Do not decode JWT without verification
-    # User email must come from verified sources only (FastMCP auth context)
 
     if not (session_id or auth_context or user_email or mcp_session_id):
         return None
