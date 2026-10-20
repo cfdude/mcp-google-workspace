@@ -109,6 +109,7 @@ _SESSION_IDLE_TIMEOUT_ENV = "WORKSPACE_MCP_SESSION_IDLE_TIMEOUT"
 # Leave a minute beyond the usual one-hour Google access-token lifetime.
 _DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 60 * 60 + 60
 _GOOGLE_API_WORKERS_ENV = "WORKSPACE_MCP_GOOGLE_API_WORKERS"
+_ALLOWED_HOSTS_ENV = "WORKSPACE_MCP_ALLOWED_HOSTS"
 
 
 def _parse_bool_env(value: str) -> bool:
@@ -189,34 +190,19 @@ def _is_same_origin_as_host(origin: str, host_header: Optional[str]) -> bool:
     )
 
 
-def _is_rebound_same_origin_fetch(headers: dict, host_header: Optional[str]) -> bool:
-    """Return True for a same-origin script request to a non-allowlisted Host.
-
-    Browsers omit Origin on same-origin GETs, so a DNS-rebinding page's fetch
-    carries only the attacker's hostname in Host. Sec-Fetch-Site (a
-    browser-forbidden header) identifies it as page script; non-browser clients
-    and user navigations, which may legitimately use any hostname, are left
-    alone. As with the same-origin fallback, OAuth 2.1 mode is exempt.
-    """
-    if headers.get(b"sec-fetch-site") != b"same-origin":
-        return False
-    if not host_header or is_oauth21_enabled():
-        return False
+def _is_host_allowed(host_header: Optional[str], allowed_hosts: frozenset[str]) -> bool:
+    """Return True when Host names loopback, an allowed host, or an allowed origin."""
     try:
-        host = urlparse(f"//{host_header}")
-        host_port = host.port
+        hostname = urlparse(f"//{host_header}").hostname if host_header else None
     except ValueError:
-        return True
-    if host.hostname in _LOOPBACK_HOSTS:
         return False
-    for origin in _get_allowed_http_origins():
-        parsed = urlparse(origin)
-        default_port = _DEFAULT_PORTS.get(parsed.scheme)
-        if parsed.hostname == host.hostname and (parsed.port or default_port) == (
-            host_port or default_port
-        ):
-            return False
-    return True
+    if not hostname:
+        return False
+    return (
+        hostname in _LOOPBACK_HOSTS
+        or hostname in allowed_hosts
+        or hostname in {urlparse(o).hostname for o in _get_allowed_http_origins()}
+    )
 
 
 def _is_null_origin_consent_compat_allowed(scope: Scope, origin: str) -> bool:
@@ -242,8 +228,11 @@ def _is_null_origin_consent_compat_allowed(scope: Scope, origin: str) -> bool:
 class OriginValidationMiddleware:
     """Reject browser-originated HTTP requests from untrusted origins."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(
+        self, app: ASGIApp, allowed_hosts: Optional[frozenset[str]] = None
+    ) -> None:
         self.app = app
+        self.allowed_hosts = allowed_hosts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
@@ -251,8 +240,10 @@ class OriginValidationMiddleware:
             raw_origin = headers.get(b"origin")
             raw_host = headers.get(b"host")
             host_header = raw_host.decode("latin-1") if raw_host else None
-            if not raw_origin and _is_rebound_same_origin_fetch(headers, host_header):
-                logger.warning("Rejected same-origin request for Host: %s", host_header)
+            if self.allowed_hosts is not None and not _is_host_allowed(
+                host_header, self.allowed_hosts
+            ):
+                logger.warning("Rejected HTTP request for Host: %s", host_header)
                 response = JSONResponse({"error": "Host not allowed"}, status_code=403)
                 await response(scope, receive, send)
                 return
@@ -277,9 +268,6 @@ class OriginValidationMiddleware:
                     return
 
         await self.app(scope, receive, send)
-
-
-origin_validation_middleware = Middleware(OriginValidationMiddleware)
 
 
 class WellKnownCacheControlMiddleware:
@@ -342,6 +330,37 @@ def _compute_scope_fingerprint() -> str:
     """Compute a short hash of the current scope configuration for cache-busting."""
     scopes_str = ",".join(sorted(get_current_scopes()))
     return hashlib.sha256(scopes_str.encode()).hexdigest()[:12]
+
+
+def get_allowed_hosts() -> Optional[frozenset[str]]:
+    """Parse WORKSPACE_MCP_ALLOWED_HOSTS; unset accepts any Host header.
+
+    Invalid values raise instead of falling back, so a misconfigured deployment
+    fails at startup.
+    """
+    raw = os.getenv(_ALLOWED_HOSTS_ENV, "").strip()
+    if not raw:
+        return None
+    hosts = set()
+    for entry in (part.strip() for part in raw.split(",")):
+        try:
+            parsed = urlparse(f"//{entry}")
+            valid = (
+                parsed.hostname is not None
+                and parsed.port is None
+                and parsed.netloc == entry
+                and "@" not in entry
+                and "*" not in entry
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError(
+                f"{_ALLOWED_HOSTS_ENV} must be a comma-separated list of hostnames "
+                f"without ports, got {entry!r}"
+            )
+        hosts.add(parsed.hostname)
+    return frozenset(hosts)
 
 
 def get_google_api_workers() -> Optional[int]:
@@ -409,7 +428,9 @@ class SecureFastMCP(FastMCP):
 
         # Add middleware in order (first added = outermost layer)
         app.user_middleware.insert(0, well_known_cache_control_middleware)
-        app.user_middleware.insert(1, origin_validation_middleware)
+        app.user_middleware.insert(
+            1, Middleware(OriginValidationMiddleware, allowed_hosts=get_allowed_hosts())
+        )
 
         # Session Management - extracts session info for MCP context
         app.user_middleware.insert(2, session_middleware)
