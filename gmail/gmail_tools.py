@@ -75,6 +75,7 @@ from gmail.gmail_helpers import (
     _derive_reply_all_recipients,
     _derive_reply_headers,
     _fetch_with_retry,
+    _format_id_list,
     _get_send_as_identity_and_signature,
     _get_send_as_signature_html_for_tool,
     _http_error_status,
@@ -86,8 +87,10 @@ from gmail.gmail_helpers import (
     apply_gmail_filter_to_existing,
     build_label_color,
     format_filter_apply_result,
+    format_thread_label_outcomes,
     html_newlines_to_br,
     html_to_text_preserving_breaks,
+    modify_gmail_thread_labels,
     send_message_once,
     update_gmail_filter,
 )
@@ -4388,14 +4391,6 @@ async def modify_gmail_message_labels(
     return f"Message labels updated successfully!\nMessage ID: {message_id}\n{'; '.join(actions)}"
 
 
-def _format_id_list(ids: List[str], limit: int = 10) -> str:
-    """Join IDs for a result message, truncating very long lists."""
-    shown = ", ".join(ids[:limit])
-    if len(ids) > limit:
-        shown += f", … (+{len(ids) - limit} more)"
-    return shown
-
-
 async def _verify_batch_label_changes(
     service,
     message_ids: List[str],
@@ -4518,49 +4513,51 @@ async def _verify_batch_label_changes(
 async def batch_modify_gmail_message_labels(
     service,
     user_google_email: str,
-    message_ids: StringList,
+    message_ids: _OptionalLabelIdList = None,
     add_label_ids: _OptionalLabelIdList = None,
     remove_label_ids: _OptionalLabelIdList = None,
     verify: bool = True,
+    thread_ids: _OptionalLabelIdList = None,
 ) -> str:
     """
-    Adds or removes labels from multiple Gmail messages in a single batch request.
+    Adds or removes labels from multiple Gmail messages in a single batch request,
+    or from whole conversations via thread_ids.
 
-    Takes MESSAGE ids, not thread ids. Gmail's batch endpoint returns no
+    message_ids takes MESSAGE ids. Gmail's batch endpoint returns no
     per-message result and silently ignores ids it does not recognise, so by
     default this reads the messages back afterwards and reports which ids
     actually changed.
 
+    thread_ids applies the change to EVERY message of each conversation
+    (users.threads.modify), e.g. archive a conversation with
+    remove_label_ids=["INBOX"] or mark it read with remove_label_ids=["UNREAD"].
+    Each thread reports its own outcome. message_ids and thread_ids can be
+    combined; at least one is required.
+
     Args:
         user_google_email (str): The user's Google email address. Required.
-        message_ids (List[str]): A list of message IDs to modify.
+        message_ids (Optional[List[str]]): A list of message IDs to modify.
         add_label_ids (Optional[List[str]]): List of label IDs to add to the messages.
         remove_label_ids (Optional[List[str]]): List of label IDs to remove from the messages.
         verify (bool): Read the messages back and report per-id outcomes. Costs
             one extra (batched) read per id. Set False for very large sweeps
             where that cost matters and an unverified result is acceptable.
+            Not needed for thread_ids, which always report per thread.
+        thread_ids (Optional[List[str]]): Thread (conversation) IDs to modify.
 
     Returns:
         str: Which label changes were applied, and which ids did not resolve.
     """
     logger.info(
-        f"[batch_modify_gmail_message_labels] Invoked. Email: '{user_google_email}', Message IDs: '{message_ids}'"
+        f"[batch_modify_gmail_message_labels] Invoked. Email: '{user_google_email}', Message IDs: '{message_ids}', Thread IDs: '{thread_ids}'"
     )
 
     if not add_label_ids and not remove_label_ids:
         raise Exception(
             "At least one of add_label_ids or remove_label_ids must be provided."
         )
-
-    body = {"ids": message_ids}
-    if add_label_ids:
-        body["addLabelIds"] = add_label_ids
-    if remove_label_ids:
-        body["removeLabelIds"] = remove_label_ids
-
-    await asyncio.to_thread(
-        service.users().messages().batchModify(userId="me", body=body).execute
-    )
+    if not message_ids and not thread_ids:
+        raise Exception("At least one of message_ids or thread_ids must be provided.")
 
     actions = []
     if add_label_ids:
@@ -4568,6 +4565,35 @@ async def batch_modify_gmail_message_labels(
     if remove_label_ids:
         actions.append(f"Removed labels: {', '.join(remove_label_ids)}")
     action_summary = "; ".join(actions)
+
+    thread_report = ""
+    if thread_ids:
+        outcomes = await modify_gmail_thread_labels(
+            service, thread_ids, add_label_ids, remove_label_ids
+        )
+        thread_report = format_thread_label_outcomes(
+            thread_ids, outcomes, action_summary
+        )
+        if not message_ids:
+            return thread_report
+
+    body = {"ids": message_ids}
+    if add_label_ids:
+        body["addLabelIds"] = add_label_ids
+    if remove_label_ids:
+        body["removeLabelIds"] = remove_label_ids
+
+    try:
+        await asyncio.to_thread(
+            service.users().messages().batchModify(userId="me", body=body).execute
+        )
+    except Exception as error:
+        if not thread_report:
+            raise
+        raise ToolExecutionError(
+            f"Label change for message_ids failed: {error}\n\n"
+            f"The thread_ids part was already processed:\n{thread_report}"
+        ) from error
 
     total = len(message_ids)
 
@@ -4577,7 +4603,7 @@ async def batch_modify_gmail_message_labels(
             "NOT VERIFIED: Gmail's batchModify returns no per-message result and "
             "silently ignores IDs it does not recognise, so this records what was "
             "asked for, not what changed. Re-run with verify=True to confirm."
-        )
+        ) + (f"\n\n{thread_report}" if thread_report else "")
 
     statuses = await _verify_batch_label_changes(
         service, message_ids, add_label_ids, remove_label_ids
@@ -4609,4 +4635,7 @@ async def batch_modify_gmail_message_labels(
             "  The read-back failed; the change may or may not have been applied."
         )
 
+    if thread_report:
+        lines.append("")
+        lines.append(thread_report)
     return "\n".join(lines)
