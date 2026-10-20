@@ -19,6 +19,8 @@ from typing import Optional
 
 from markdown_it import MarkdownIt
 
+_NORMAL_TEXT = {"namedStyleType": "NORMAL_TEXT"}
+
 
 def markdown_to_docs_requests(
     markdown_text: str,
@@ -68,15 +70,16 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             range_start = cursor[0]
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += len(text)
-            requests.append(_build_heading_style(range_start, cursor[0], level, tab_id))
+            requests.append(
+                _build_paragraph_style(
+                    range_start,
+                    cursor[0],
+                    {"namedStyleType": f"HEADING_{level}"},
+                    tab_id,
+                )
+            )
             requests.extend(inline_styles)
-            # Blank spacer paragraph between top-level blocks for visual spacing.
-            # Reset the spacer to NORMAL_TEXT so the next block's inserts don't
-            # inherit HEADING_N from the heading paragraph above.
-            spacer_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(spacer_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i += 3
             continue
 
@@ -117,6 +120,9 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                         requests.extend(inline_styles)
                 k += 1
             list_end = cursor[0]
+            requests.append(
+                _build_paragraph_style(list_start, list_end, _NORMAL_TEXT, tab_id)
+            )
             # One createParagraphBullets covering the full list range
             rng = {"startIndex": list_start, "endIndex": list_end}
             if tab_id:
@@ -129,12 +135,7 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                     }
                 }
             )
-            # Blank spacer paragraph between top-level blocks for visual spacing.
-            # Reset to NORMAL_TEXT so the next block doesn't inherit list style.
-            spacer_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(spacer_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i = j + 1
             continue
 
@@ -148,9 +149,9 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             text = content if content.endswith("\n") else content + "\n"
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += len(text)
-            # Reset the fenced code paragraph(s) to NORMAL_TEXT so they don't
-            # inherit a surrounding heading style.
-            requests.append(_build_normal_text_style(start_idx, cursor[0], tab_id))
+            requests.append(
+                _build_paragraph_style(start_idx, cursor[0], _NORMAL_TEXT, tab_id)
+            )
             # Style the code characters but not the paragraph-ending newline.
             code_end = cursor[0] - 1
             _append_text_style(
@@ -161,11 +162,7 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                 "weightedFontFamily",
                 tab_id,
             )
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            spacer_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(spacer_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i += 1
             continue
 
@@ -202,38 +199,24 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                     continue
                 k += 1
             quote_end = cursor[0]
-            # Apply indent across the whole blockquote range
-            rng = {"startIndex": quote_start, "endIndex": quote_end}
-            if tab_id:
-                rng["tabId"] = tab_id
+            # One request: Docs applies namedStyleType before indentStart.
             requests.append(
-                {
-                    "updateParagraphStyle": {
-                        "range": rng,
-                        "paragraphStyle": {
-                            "indentStart": {"magnitude": 36, "unit": "PT"},
-                        },
-                        "fields": "indentStart",
-                    }
-                }
+                _build_paragraph_style(
+                    quote_start,
+                    quote_end,
+                    {
+                        **_NORMAL_TEXT,
+                        "indentStart": {"magnitude": 36, "unit": "PT"},
+                    },
+                    tab_id,
+                )
             )
-            # Reset namedStyleType to NORMAL_TEXT across the blockquote so
-            # quoted paragraphs don't inherit a surrounding heading style.
-            requests.append(_build_normal_text_style(quote_start, quote_end, tab_id))
-            # Blank spacer paragraph between top-level blocks for visual spacing.
-            spacer_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(spacer_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i = j + 1
             continue
 
         if tok.type == "hr":
-            # Emit a blank paragraph as a visual separator, reset to NORMAL_TEXT.
-            hr_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(hr_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i += 1
             continue
 
@@ -247,18 +230,13 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             range_start = cursor[0]
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += len(text)
-            # Reset the inserted paragraph to NORMAL_TEXT so it doesn't
-            # inherit a surrounding heading/blockquote/list style when this
-            # converter targets a mid-document index.
-            requests.append(_build_normal_text_style(range_start, cursor[0], tab_id))
+            requests.append(
+                _build_paragraph_style(range_start, cursor[0], _NORMAL_TEXT, tab_id)
+            )
             requests.extend(inline_styles)
-            # Blank spacer paragraph between top-level blocks for visual spacing.
             # Only top-level paragraphs receive spacers - list-item paragraphs
             # and blockquote paragraphs dispatch inside their own branches.
-            spacer_start = cursor[0]
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            requests.append(_build_normal_text_style(spacer_start, cursor[0], tab_id))
+            _append_spacer(requests, cursor, tab_id)
             i += 3  # skip paragraph_open, inline, paragraph_close
             continue
 
@@ -420,41 +398,28 @@ def _build_insert_text(index: int, text: str, tab_id: Optional[str]) -> dict:
     return {"insertText": {"location": location, "text": text}}
 
 
-def _build_heading_style(
-    start: int, end: int, level: int, tab_id: Optional[str]
+def _build_paragraph_style(
+    start: int, end: int, style: dict, tab_id: Optional[str]
 ) -> dict:
-    """Build updateParagraphStyle request setting HEADING_N named style."""
+    """Build an updateParagraphStyle request covering every key in style."""
     rng = {"startIndex": start, "endIndex": end}
     if tab_id:
         rng["tabId"] = tab_id
     return {
         "updateParagraphStyle": {
             "range": rng,
-            "paragraphStyle": {"namedStyleType": f"HEADING_{level}"},
-            "fields": "namedStyleType",
+            "paragraphStyle": dict(style),
+            "fields": ",".join(style),
         }
     }
 
 
-def _build_normal_text_style(start: int, end: int, tab_id: Optional[str]) -> dict:
-    """Build updateParagraphStyle resetting a range to NORMAL_TEXT.
-
-    Without this, new paragraphs created by insertText at a position that
-    happens to lie inside a non-NORMAL paragraph (a heading, blockquote, etc.)
-    inherit the surrounding namedStyleType. When this converter targets a
-    mid-document index — e.g. via the section-edit tools — the first inserted
-    paragraph often lands at the boundary of a deleted heading and inherits
-    HEADING_N. Emitting an explicit NORMAL_TEXT reset for every body paragraph,
-    fence block, and inter-block spacer fixes that without affecting the
-    heading paragraphs (which immediately re-style via _build_heading_style).
-    """
-    rng = {"startIndex": start, "endIndex": end}
-    if tab_id:
-        rng["tabId"] = tab_id
-    return {
-        "updateParagraphStyle": {
-            "range": rng,
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "fields": "namedStyleType",
-        }
-    }
+def _append_spacer(
+    requests: list[dict], cursor: list[int], tab_id: Optional[str]
+) -> None:
+    """Append a blank NORMAL_TEXT spacer paragraph and advance cursor."""
+    requests.append(_build_insert_text(cursor[0], "\n", tab_id))
+    cursor[0] += 1
+    requests.append(
+        _build_paragraph_style(cursor[0] - 1, cursor[0], _NORMAL_TEXT, tab_id)
+    )
