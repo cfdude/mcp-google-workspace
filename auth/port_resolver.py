@@ -63,8 +63,6 @@ def _is_port_free(host: str, port: int) -> bool:
             s.bind((host, port))
         return True
     except OSError as exc:
-        # Every bind failure used to collapse to a bare "busy", which made a
-        # misconfigured bind host indistinguishable from a real collision.
         logger.debug(
             "Port resolver: bind %s:%d failed -- %s (%s)",
             host,
