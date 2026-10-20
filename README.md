@@ -257,6 +257,8 @@ The **[Advanced Deployment guide](https://workspacemcp.com/docs/deployment?utm_s
 
 Advanced OAuth 2.1 deployments affected by concurrent client token refreshes can tune FastMCP's early-refresh threshold and client-facing access-token lifetime. See [`.env.oauth21`](.env.oauth21) for the bounded settings, recommended values, and security tradeoffs. These settings reduce how often the race occurs; they do not add a grace period to FastMCP's one-time-use refresh-token rotation.
 
+`WORKSPACE_MCP_OAUTH_PROXY_REQUIRE_CONSENT=remember` makes the OAuth proxy show its consent screen once per browser for each MCP client instead of on every authorization; cross-site navigations are still prompted. The default, `always`, prompts every time. Any other value fails startup.
+
 ## Security Best Practices
 
 By default this server sends no data anywhere except Google's APIs, using your own OAuth client credentials - no usage reporting, analytics, license server, or SaaS dependency. MIT licensed with no CLA, no dual licensing, and no copyleft in the dependency chain. The full security posture - scope minimization, sensitive-path blocking, stateless mode - is documented at [workspacemcp.com](https://workspacemcp.com/privacy?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=security-privacy).

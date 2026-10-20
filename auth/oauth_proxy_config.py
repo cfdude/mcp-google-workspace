@@ -15,20 +15,7 @@ OAUTH_REQUIRE_CONSENT_ENV = "WORKSPACE_MCP_OAUTH_PROXY_REQUIRE_CONSENT"
 MAX_OAUTH_TOKEN_EXPIRY_THRESHOLD_SECONDS = 5 * 60
 MAX_OAUTH_ACCESS_TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
-_CONSENT_MODES: dict[str, bool | str] = {
-    "always": True,
-    "true": True,
-    "1": True,
-    "yes": True,
-    "on": True,
-    "remember": "remember",
-    "external": "external",
-    "never": False,
-    "false": False,
-    "0": False,
-    "no": False,
-    "off": False,
-}
+_CONSENT_MODES: dict[str, bool | str] = {"always": True, "remember": "remember"}
 
 
 def _parse_expiry_seconds_env(
@@ -91,31 +78,13 @@ def get_oauth_proxy_expiry_kwargs() -> dict[str, int]:
 
 
 def get_oauth_proxy_consent_kwargs() -> dict[str, bool | str]:
-    """Return the configured consent-screen keyword argument for GoogleProvider.
-
-    Unset or unrecognised values are omitted so FastMCP retains ownership of its
-    default, which prompts on every authorization.
-    """
+    """Return GoogleProvider's consent-screen kwarg, empty when unset."""
     raw = os.getenv(OAUTH_REQUIRE_CONSENT_ENV, "").strip().lower()
     if not raw:
         return {}
     if raw not in _CONSENT_MODES:
-        logger.warning(
-            "Ignoring %s: %r is not one of %s",
-            OAUTH_REQUIRE_CONSENT_ENV,
-            raw,
-            ", ".join(sorted(_CONSENT_MODES)),
+        raise ValueError(
+            f"{OAUTH_REQUIRE_CONSENT_ENV} must be one of "
+            f"{', '.join(_CONSENT_MODES)}, got {raw!r}"
         )
-        return {}
-
-    mode = _CONSENT_MODES[raw]
-    if mode is False:
-        logger.warning(
-            "OAuth 2.1: consent screen disabled via %s; this drops the "
-            "authorization-server-in-the-middle mitigation and is intended for "
-            "local development only",
-            OAUTH_REQUIRE_CONSENT_ENV,
-        )
-    else:
-        logger.info("OAuth 2.1: consent screen mode set to %r", mode)
-    return {"require_authorization_consent": mode}
+    return {"require_authorization_consent": _CONSENT_MODES[raw]}

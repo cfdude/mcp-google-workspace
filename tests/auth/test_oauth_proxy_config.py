@@ -72,8 +72,12 @@ def test_token_expiry_env_accepts_safe_limit_boundaries(monkeypatch):
     }
 
 
-def test_consent_env_default_leaves_fastmcp_behaviour_unchanged(monkeypatch):
-    monkeypatch.delenv(OAUTH_REQUIRE_CONSENT_ENV, raising=False)
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_consent_env_unset_leaves_fastmcp_default(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(OAUTH_REQUIRE_CONSENT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(OAUTH_REQUIRE_CONSENT_ENV, value)
 
     assert get_oauth_proxy_consent_kwargs() == {}
 
@@ -82,12 +86,9 @@ def test_consent_env_default_leaves_fastmcp_behaviour_unchanged(monkeypatch):
     ("value", "expected"),
     [
         ("always", True),
-        ("TRUE", True),
-        ("on", True),
+        ("ALWAYS", True),
         ("remember", "remember"),
-        ("External", "external"),
-        ("never", False),
-        ("0", False),
+        (" Remember ", "remember"),
     ],
 )
 def test_consent_env_maps_to_the_provider_kwarg(monkeypatch, value, expected):
@@ -98,8 +99,11 @@ def test_consent_env_maps_to_the_provider_kwarg(monkeypatch, value, expected):
     }
 
 
-@pytest.mark.parametrize("value", ["maybe", "  ", "rememberr"])
-def test_consent_env_ignores_unusable_values(monkeypatch, value):
+@pytest.mark.parametrize(
+    "value", ["rememberr", "never", "false", "0", "external", "true"]
+)
+def test_consent_env_rejects_unsupported_values(monkeypatch, value):
     monkeypatch.setenv(OAUTH_REQUIRE_CONSENT_ENV, value)
 
-    assert get_oauth_proxy_consent_kwargs() == {}
+    with pytest.raises(ValueError, match=OAUTH_REQUIRE_CONSENT_ENV):
+        get_oauth_proxy_consent_kwargs()
