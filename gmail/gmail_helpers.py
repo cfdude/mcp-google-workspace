@@ -1034,12 +1034,14 @@ async def _get_send_as_identity_and_signature(
     service,
     from_email: Optional[str],
     fallback_email: str,
+    require_match: bool = True,
 ) -> tuple[str, str, str]:
     """Resolve (sender_email, display_name, signature_html) for a send-as identity.
 
-    Raises when from_email is not a usable send-as address, since Gmail would
-    silently send from the default address instead. Validation is skipped when
-    the send-as list is unreadable.
+    With require_match, raises when from_email is not a usable send-as address,
+    since Gmail would silently send from the default address instead; without
+    it, an unlisted from_email takes the primary entry's signature. Validation
+    is skipped when the send-as list is unreadable.
     """
     send_as_entries = await _get_send_as_entries(service)
     selected_entry = None
@@ -1048,7 +1050,12 @@ async def _get_send_as_identity_and_signature(
         if not send_as_entries:
             return from_email, "", ""
         selected_entry = _find_send_as_entry(send_as_entries, from_email)
-        if selected_entry is None or not _send_as_entry_is_usable(selected_entry):
+        if not require_match:
+            selected_entry = selected_entry or next(
+                (entry for entry in send_as_entries if entry.get("isPrimary")),
+                send_as_entries[0],
+            )
+        elif selected_entry is None or not _send_as_entry_is_usable(selected_entry):
             accepted = [
                 entry.get("sendAsEmail", "")
                 for entry in send_as_entries

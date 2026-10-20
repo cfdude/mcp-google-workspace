@@ -168,3 +168,33 @@ async def test_draft_rejects_an_alias_that_is_not_configured():
 
     assert "brand@example.com" in str(exc.value)
     service.users.return_value.drafts.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_without_from_email_tolerates_an_unlisted_login_address():
+    login = dict(PRIMARY, sendAsEmail="login@example.com", signature="Login sig")
+    service = _service_with_send_as([login, ACCEPTED_ALIAS])
+
+    await _send(service)
+
+    sent = _sent_message(service)
+    assert sent["From"] == "primary@example.com"
+    assert "Login sig" in sent.get_body().get_content()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [send_gmail_message, draft_gmail_message])
+async def test_forward_rejects_an_alias_that_is_not_configured(tool):
+    service = _service_with_send_as([PRIMARY, ACCEPTED_ALIAS])
+
+    with pytest.raises(ToolError) as exc:
+        await _unwrap(tool)(
+            service=service,
+            user_google_email="primary@example.com",
+            to="recipient@example.com",
+            forward_message_id="orig_1",
+            from_email="nobody@example.com",
+        )
+
+    assert "nobody@example.com" in str(exc.value)
+    service.users.return_value.messages.return_value.get.assert_not_called()

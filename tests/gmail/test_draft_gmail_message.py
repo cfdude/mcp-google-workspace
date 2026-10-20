@@ -2015,8 +2015,14 @@ async def test_draft_gmail_message_forward_creates_draft_instead_of_sending():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("from_email", [None, "explicit@example.com"])
-async def test_forward_draft_selects_send_as_identity(from_email):
+@pytest.mark.parametrize(
+    ("from_email", "expected_from"),
+    [
+        (None, "default.alias@example.com"),
+        ("primary@example.com", "Example User <primary@example.com>"),
+    ],
+)
+async def test_forward_draft_selects_send_as_identity(from_email, expected_from):
     service = _mock_gmail_service()
     service.users().settings().sendAs().list().execute.return_value = (
         _default_alias_send_as_response()
@@ -2035,10 +2041,9 @@ async def test_forward_draft_selects_send_as_identity(from_email):
 
     raw = service.users().drafts().create.call_args.kwargs["body"]["message"]["raw"]
     drafted = _parse_raw_message(raw)
-    assert drafted["From"] == (from_email or "default.alias@example.com")
+    assert drafted["From"] == expected_from
     assert "signature" not in drafted.get_body().get_content()
-    if from_email:
-        service.users().settings().sendAs().list.assert_not_called()
+    service.users().settings().sendAs().list.assert_called_once()
 
 
 @pytest.mark.asyncio

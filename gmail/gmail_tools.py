@@ -2825,6 +2825,11 @@ async def send_gmail_message(
         logger.info(
             f"[send_gmail_message] Forwarding message '{forward_message_id}' for '{user_google_email}'"
         )
+        if from_email:
+            _, sender_display_name, _ = await _get_send_as_identity_and_signature(
+                service, from_email=from_email, fallback_email=user_google_email
+            )
+            from_name = from_name or sender_display_name or None
         return await _forward_gmail_message_impl(
             service=service,
             message_id=forward_message_id,
@@ -2874,6 +2879,7 @@ async def send_gmail_message(
             service,
             from_email=sender_email,
             fallback_email=user_google_email,
+            require_match=bool(from_email),
         )
     if from_email and not from_name:
         from_name = sender_display_name or None
@@ -3358,11 +3364,15 @@ async def draft_gmail_message(
         )
     """
     if forward_message_id:
-        sender_email = from_email
-        if not sender_email:
-            sender_email, _, _ = await _get_send_as_identity_and_signature(
-                service, from_email=None, fallback_email=user_google_email
-            )
+        (
+            sender_email,
+            sender_display_name,
+            _,
+        ) = await _get_send_as_identity_and_signature(
+            service, from_email=from_email, fallback_email=user_google_email
+        )
+        if from_email and not from_name:
+            from_name = sender_display_name or None
         logger.info(
             f"[draft_gmail_message] Drafting forward of message '{forward_message_id}' for '{user_google_email}'"
         )
