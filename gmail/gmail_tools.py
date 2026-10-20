@@ -2555,7 +2555,7 @@ async def get_gmail_attachment_content(
     title="Send Gmail Message",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
     ),
