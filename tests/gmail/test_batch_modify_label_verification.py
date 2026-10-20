@@ -247,9 +247,9 @@ async def test_batch_modify_is_still_called_once_with_all_ids():
 # --- thread_ids ------------------------------------------------------------------
 
 
-def _http_error(status):
+def _http_error(status, content=b"{}"):
     resp = Mock(status=status, reason="err")
-    return HttpError(resp, b"{}")
+    return HttpError(resp, content)
 
 
 @pytest.fixture
@@ -320,7 +320,7 @@ async def test_thread_ids_use_threads_modify_and_report_per_thread(no_backoff):
     assert "Applied: 1/3" in result
     assert "No such thread (1): t-gone" in result
     assert "MESSAGE id where a THREAD id is required" in result
-    assert "Failed (1): t-bad (failed: HTTP 500)" in result
+    assert "Failed (1): t-bad (failed: HTTP 500 err)" in result
 
 
 @pytest.mark.asyncio
@@ -371,8 +371,16 @@ async def test_thread_rate_limit_is_retried_before_failing(no_backoff):
         service, thread_ids=["t-busy", "t-down"], add_label_ids=["STARRED"]
     )
     assert "Applied: 1/2" in result
-    assert "Failed (1): t-down (failed: HTTP 500)" in result
+    assert "Failed (1): t-down (failed: HTTP 500 err)" in result
     assert no_backoff == [1, 2, 1, 2, 4]
+
+
+@pytest.mark.asyncio
+async def test_thread_failure_reports_api_reason():
+    error = _http_error(400, b'{"error": {"message": "Invalid label: Work"}}')
+    service = _thread_service({"t-1": [error]})
+    result = await _run(service, thread_ids=["t-1"], add_label_ids=["Work"])
+    assert "Failed (1): t-1 (failed: HTTP 400 Invalid label: Work)" in result
 
 
 @pytest.mark.asyncio

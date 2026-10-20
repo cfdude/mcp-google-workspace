@@ -75,6 +75,7 @@ from gmail.gmail_helpers import (
     _derive_reply_all_recipients,
     _derive_reply_headers,
     _fetch_with_retry,
+    _format_id_list,
     _get_send_as_identity_and_signature,
     _get_send_as_signature_html_for_tool,
     _http_error_status,
@@ -86,9 +87,9 @@ from gmail.gmail_helpers import (
     apply_gmail_filter_to_existing,
     build_label_color,
     format_filter_apply_result,
+    format_thread_label_outcomes,
     html_newlines_to_br,
     html_to_text_preserving_breaks,
-    format_thread_label_outcomes,
     modify_gmail_thread_labels,
     send_message_once,
     update_gmail_filter,
@@ -4390,14 +4391,6 @@ async def modify_gmail_message_labels(
     return f"Message labels updated successfully!\nMessage ID: {message_id}\n{'; '.join(actions)}"
 
 
-def _format_id_list(ids: List[str], limit: int = 10) -> str:
-    """Join IDs for a result message, truncating very long lists."""
-    shown = ", ".join(ids[:limit])
-    if len(ids) > limit:
-        shown += f", … (+{len(ids) - limit} more)"
-    return shown
-
-
 async def _verify_batch_label_changes(
     service,
     message_ids: List[str],
@@ -4566,13 +4559,20 @@ async def batch_modify_gmail_message_labels(
     if not message_ids and not thread_ids:
         raise Exception("At least one of message_ids or thread_ids must be provided.")
 
+    actions = []
+    if add_label_ids:
+        actions.append(f"Added labels: {', '.join(add_label_ids)}")
+    if remove_label_ids:
+        actions.append(f"Removed labels: {', '.join(remove_label_ids)}")
+    action_summary = "; ".join(actions)
+
     thread_report = ""
     if thread_ids:
         outcomes = await modify_gmail_thread_labels(
             service, thread_ids, add_label_ids, remove_label_ids
         )
         thread_report = format_thread_label_outcomes(
-            thread_ids, outcomes, add_label_ids, remove_label_ids
+            thread_ids, outcomes, action_summary
         )
         if not message_ids:
             return thread_report
@@ -4590,18 +4590,10 @@ async def batch_modify_gmail_message_labels(
     except Exception as error:
         if not thread_report:
             raise
-        # The thread changes are already done: keep their report in the error.
         raise ToolExecutionError(
             f"Label change for message_ids failed: {error}\n\n"
             f"The thread_ids part was already processed:\n{thread_report}"
         ) from error
-
-    actions = []
-    if add_label_ids:
-        actions.append(f"Added labels: {', '.join(add_label_ids)}")
-    if remove_label_ids:
-        actions.append(f"Removed labels: {', '.join(remove_label_ids)}")
-    action_summary = "; ".join(actions)
 
     total = len(message_ids)
 
