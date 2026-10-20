@@ -20,6 +20,10 @@ from typing import Optional
 
 from markdown_it import MarkdownIt
 
+_NORMAL_TEXT = {"namedStyleType": "NORMAL_TEXT"}
+_DOCS_MAX_TABLE_ROWS = 1000
+_DOCS_MAX_TABLE_COLS = 20
+
 
 def markdown_to_docs_requests(
     markdown_text: str,
@@ -48,14 +52,7 @@ def markdown_to_docs_requests(
 
 
 def _utf16_len(text: str) -> int:
-    """Length of text in UTF-16 code units - the unit Docs API indexes use.
-
-    Python len() counts code points, so any non-BMP character (emoji and
-    other supplementary-plane characters) would otherwise undercount by one
-    UTF-16 unit and shift every later insertion index and style range.
-    surrogatepass keeps lone surrogates (possible in poorly scraped input)
-    counting as single code units instead of raising UnicodeEncodeError.
-    """
+    """Return the length of text in UTF-16 code units, the Docs API index unit."""
     return len(text.encode("utf-16-le", errors="surrogatepass")) // 2
 
 
@@ -63,8 +60,7 @@ def _emit_requests(tokens, requests, tab_id, start_index):
     """Walk markdown-it tokens and append Docs API requests.
 
     Maintains a running `cursor` that represents the current insertion point
-    in the document. Each insertText advances cursor by the UTF-16 length
-    of the inserted text (see _utf16_len), matching Docs API index units.
+    in the document. Each insertText advances cursor by _utf16_len(text).
     """
     cursor = [start_index]  # mutable via list so helpers can advance it
 
@@ -82,11 +78,16 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             range_start = cursor[0]
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += _utf16_len(text)
-            requests.append(_build_heading_style(range_start, cursor[0], level, tab_id))
+            requests.append(
+                _build_paragraph_style(
+                    range_start,
+                    cursor[0],
+                    {"namedStyleType": f"HEADING_{level}"},
+                    tab_id,
+                )
+            )
             requests.extend(inline_styles)
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i += 3
             continue
 
@@ -113,7 +114,10 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             k = i + 1
             while k < j:
                 item = tokens[k]
-                if item.type == "list_item_open":
+                if item.type == "table_open":
+                    row_cells, k = _collect_table_cells(tokens, k)
+                    _emit_table_rows_as_text(row_cells, requests, cursor, tab_id)
+                elif item.type == "list_item_open":
                     # Inner structure typically - list_item_open, paragraph_open, inline, paragraph_close, list_item_close
                     # Find the inline token within this list_item
                     if k + 2 < j and tokens[k + 2].type == "inline":
@@ -127,6 +131,9 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                         requests.extend(inline_styles)
                 k += 1
             list_end = cursor[0]
+            requests.append(
+                _build_paragraph_style(list_start, list_end, _NORMAL_TEXT, tab_id)
+            )
             # One createParagraphBullets covering the full list range
             rng = {"startIndex": list_start, "endIndex": list_end}
             if tab_id:
@@ -139,9 +146,7 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                     }
                 }
             )
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i = j + 1
             continue
 
@@ -155,6 +160,9 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             text = content if content.endswith("\n") else content + "\n"
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += _utf16_len(text)
+            requests.append(
+                _build_paragraph_style(start_idx, cursor[0], _NORMAL_TEXT, tab_id)
+            )
             # Style the code characters but not the paragraph-ending newline.
             code_end = cursor[0] - 1
             _append_text_style(
@@ -165,9 +173,7 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                 "weightedFontFamily",
                 tab_id,
             )
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i += 1
             continue
 
@@ -187,6 +193,11 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             # Process paragraphs inside the blockquote
             k = i + 1
             while k < j:
+                if tokens[k].type == "table_open":
+                    row_cells, k = _collect_table_cells(tokens, k)
+                    _emit_table_rows_as_text(row_cells, requests, cursor, tab_id)
+                    k += 1
+                    continue
                 if (
                     tokens[k].type == "paragraph_open"
                     and k + 1 < j
@@ -204,51 +215,32 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                     continue
                 k += 1
             quote_end = cursor[0]
-            # Apply indent across the whole blockquote range
-            rng = {"startIndex": quote_start, "endIndex": quote_end}
-            if tab_id:
-                rng["tabId"] = tab_id
+            # One request: Docs applies namedStyleType before indentStart.
             requests.append(
-                {
-                    "updateParagraphStyle": {
-                        "range": rng,
-                        "paragraphStyle": {
-                            "indentStart": {"magnitude": 36, "unit": "PT"},
-                        },
-                        "fields": "indentStart",
-                    }
-                }
+                _build_paragraph_style(
+                    quote_start,
+                    quote_end,
+                    {
+                        **_NORMAL_TEXT,
+                        "indentStart": {"magnitude": 36, "unit": "PT"},
+                    },
+                    tab_id,
+                )
             )
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i = j + 1
             continue
 
         if tok.type == "hr":
-            # Emit a blank paragraph as a visual separator
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i += 1
             continue
 
         if tok.type == "table_open":
-            depth = 1
-            j = i + 1
-            while j < len(tokens) and depth > 0:
-                if tokens[j].type == "table_open":
-                    depth += 1
-                elif tokens[j].type == "table_close":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            row_cells = _collect_table_cells(tokens, i + 1, j)
+            row_cells, i = _collect_table_cells(tokens, i)
             _emit_table(row_cells, requests, cursor, tab_id)
-            # Blank spacer paragraph between top-level blocks for visual spacing
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
-            i = j + 1
+            _append_spacer(requests, cursor, tab_id)
+            i += 1
             continue
 
         if tok.type == "paragraph_open":
@@ -258,133 +250,74 @@ def _emit_requests(tokens, requests, tab_id, start_index):
                 inline_tok.children or [], cursor[0], tab_id
             )
             text += "\n"
+            range_start = cursor[0]
             requests.append(_build_insert_text(cursor[0], text, tab_id))
             cursor[0] += _utf16_len(text)
+            requests.append(
+                _build_paragraph_style(range_start, cursor[0], _NORMAL_TEXT, tab_id)
+            )
             requests.extend(inline_styles)
-            # Blank spacer paragraph between top-level blocks for visual spacing.
             # Only top-level paragraphs receive spacers - list-item paragraphs
             # and blockquote paragraphs dispatch inside their own branches.
-            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
-            cursor[0] += 1
+            _append_spacer(requests, cursor, tab_id)
             i += 3  # skip paragraph_open, inline, paragraph_close
             continue
 
         i += 1
 
 
-def _collect_table_cells(tokens, start, end):
-    """Collect table cell inline tokens between table_open and table_close.
-
-    Args:
-        tokens - the full markdown-it token list
-        start - index of the first token after table_open
-        end - index of the matching table_close
-
-    Returns:
-        List of rows; each row is a list of cells; each cell is the list of
-        inline child tokens for that cell (empty list for an empty cell).
-    """
+def _collect_table_cells(tokens, start):
+    """Return (rows of cell inline children, index of the matching table_close)."""
     rows: list[list] = []
-    current_row: Optional[list] = None
     k = start
-    while k < end:
-        t = tokens[k]
-        if t.type == "tr_open":
-            current_row = []
-        elif t.type == "tr_close":
-            if current_row is not None:
-                rows.append(current_row)
-            current_row = None
-        elif t.type in ("th_open", "td_open") and current_row is not None:
-            if k + 1 < end and tokens[k + 1].type == "inline":
-                current_row.append(tokens[k + 1].children or [])
-                k += 1
-            else:
-                current_row.append([])
+    while tokens[k].type != "table_close":
+        if tokens[k].type == "tr_open":
+            rows.append([])
+        elif tokens[k].type == "inline":
+            rows[-1].append(tokens[k].children or [])
         k += 1
-    return rows
+    return rows, k
 
 
-# Google Docs API hard limits on table dimensions.
-_DOCS_MAX_TABLE_ROWS = 1000
-_DOCS_MAX_TABLE_COLS = 20
+def _emit_table_rows_as_text(row_cells, requests, cursor, tab_id):
+    """Emit each table row as one plain-text paragraph with cells joined by ' | '."""
+    for row in row_cells:
+        cells = (_render_inline_with_styles(cell, 0, tab_id)[0] for cell in row)
+        line = " | ".join(cells) + "\n"
+        requests.append(_build_insert_text(cursor[0], line, tab_id))
+        cursor[0] += _utf16_len(line)
 
 
 def _emit_table(row_cells, requests, cursor, tab_id):
-    """Emit insertTable plus cell-fill requests for one markdown table.
+    """Emit insertTable plus cell fills for one table and advance cursor past it.
 
-    A freshly inserted empty table has a deterministic index layout, which
-    lets the whole table land in the same single batchUpdate as the rest of
-    the markdown - no document re-fetch between requests:
-
-    - insertTable at index L first inserts a newline at L; the table element
-      itself starts at L + 1 and occupies 2 + rows * (1 + 2 * cols) indexes
-      (1 leading and 1 trailing structural index, plus 1 per row plus, per
-      cell, 1 for the cell and 1 for its empty paragraph). Verified against
-      the live API - a 2x2 table inserted at index 1 yields table [2, 14)
-      with cell paragraphs at 5, 7, 10, 12 and the next paragraph at 14.
-    - Row r starts at L + 2 + r * (1 + 2 * cols); cell (r, c) starts 1 + 2c
-      after that, and its text insertion point is one past the cell start.
-
-    Cells are filled bottom-right to top-left so each insertion happens at
-    its precomputed empty-table index without shifting the ones still to
-    come. Text styles ride along with already-inserted text, so applying
-    them before earlier-position fills is safe. The header row is bolded to
-    match the create_table_with_data tool's default.
-
-    Advances cursor past the fully populated table.
+    An empty R x C table inserted at L keeps a newline paragraph at L, puts
+    cell (r, c)'s paragraph at L + 4 + r * (1 + 2C) + 2c and ends at
+    L + 3 + R * (1 + 2C); cells fill last to first so those indexes hold.
     """
-    rows = len(row_cells)
-    cols = max((len(r) for r in row_cells), default=0)
-    if rows == 0 or cols == 0:
-        return
-
+    rows, cols = len(row_cells), len(row_cells[0])
+    start = cursor[0]
     if rows > _DOCS_MAX_TABLE_ROWS or cols > _DOCS_MAX_TABLE_COLS:
-        # Docs would reject the insertTable request and fail the whole
-        # batch; degrade to one plain-text paragraph per row instead.
-        for row in row_cells:
-            cell_texts = []
-            for children in row:
-                text, _ = _render_inline_with_styles(children, cursor[0], tab_id)
-                cell_texts.append(text)
-            line = " | ".join(cell_texts) + "\n"
-            requests.append(_build_insert_text(cursor[0], line, tab_id))
-            cursor[0] += _utf16_len(line)
+        _emit_table_rows_as_text(row_cells, requests, cursor, tab_id)
+        requests.append(_build_paragraph_style(start, cursor[0], _NORMAL_TEXT, tab_id))
         return
 
-    table_location = cursor[0]
-    requests.append(_build_insert_table(table_location, rows, cols, tab_id))
-
-    fills = []
-    total_text_len = 0
-    for r in range(rows):
-        row_start = table_location + 2 + r * (1 + 2 * cols)
-        for c in range(cols):
-            insertion_index = row_start + 2 + 2 * c
-            children = row_cells[r][c] if c < len(row_cells[r]) else []
-            text, styles = _render_inline_with_styles(
-                children, insertion_index, tab_id
-            )
+    requests.append(_build_insert_table(start, rows, cols, tab_id))
+    requests.append(_build_paragraph_style(start, start + 1, _NORMAL_TEXT, tab_id))
+    stride = 1 + 2 * cols
+    cursor[0] = start + 3 + rows * stride
+    for r in reversed(range(rows)):
+        for c in reversed(range(cols)):
+            index = start + 4 + r * stride + 2 * c
+            text, styles = _render_inline_with_styles(row_cells[r][c], index, tab_id)
             if not text:
                 continue
-            fills.append((insertion_index, text, styles, r == 0))
-            total_text_len += _utf16_len(text)
-
-    for insertion_index, text, styles, is_header in reversed(fills):
-        requests.append(_build_insert_text(insertion_index, text, tab_id))
-        requests.extend(styles)
-        if is_header:
-            _append_text_style(
-                requests,
-                insertion_index,
-                insertion_index + _utf16_len(text),
-                {"bold": True},
-                "bold",
-                tab_id,
-            )
-
-    empty_table_end = table_location + 3 + rows * (1 + 2 * cols)
-    cursor[0] = empty_table_end + total_text_len
+            end = index + _utf16_len(text)
+            requests.append(_build_insert_text(index, text, tab_id))
+            requests.extend(styles)
+            if r == 0:
+                _append_text_style(requests, index, end, {"bold": True}, "bold", tab_id)
+            cursor[0] += end - index
 
 
 def _build_insert_table(
@@ -558,17 +491,28 @@ def _build_insert_text(index: int, text: str, tab_id: Optional[str]) -> dict:
     return {"insertText": {"location": location, "text": text}}
 
 
-def _build_heading_style(
-    start: int, end: int, level: int, tab_id: Optional[str]
+def _build_paragraph_style(
+    start: int, end: int, style: dict, tab_id: Optional[str]
 ) -> dict:
-    """Build updateParagraphStyle request setting HEADING_N named style."""
+    """Build an updateParagraphStyle request covering every key in style."""
     rng = {"startIndex": start, "endIndex": end}
     if tab_id:
         rng["tabId"] = tab_id
     return {
         "updateParagraphStyle": {
             "range": rng,
-            "paragraphStyle": {"namedStyleType": f"HEADING_{level}"},
-            "fields": "namedStyleType",
+            "paragraphStyle": dict(style),
+            "fields": ",".join(style),
         }
     }
+
+
+def _append_spacer(
+    requests: list[dict], cursor: list[int], tab_id: Optional[str]
+) -> None:
+    """Append a blank NORMAL_TEXT spacer paragraph and advance cursor."""
+    requests.append(_build_insert_text(cursor[0], "\n", tab_id))
+    cursor[0] += 1
+    requests.append(
+        _build_paragraph_style(cursor[0] - 1, cursor[0], _NORMAL_TEXT, tab_id)
+    )
