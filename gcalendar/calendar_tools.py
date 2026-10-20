@@ -623,6 +623,8 @@ async def get_events(
             # Basic output format
             meeting_link = _get_meeting_link(item)
             basic_line = f'- "{summary}" (Starts: {start_time}, Ends: {end_time})'
+            if item.get("status") == "cancelled":
+                basic_line += " Status: cancelled"
             if meeting_link:
                 basic_line += f" Meeting: {meeting_link}"
             basic_line += f" ID: {item_event_id} | Link: {link}"
