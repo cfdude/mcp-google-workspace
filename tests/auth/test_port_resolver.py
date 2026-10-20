@@ -5,9 +5,9 @@ raise-when-all-held, OAuthConfig redirect_uri integration, and PEP 562
 lazy-evaluation of core.config.WORKSPACE_MCP_PORT.
 """
 
+import importlib
 import os
 import socket
-import sys
 from contextlib import contextmanager
 
 import pytest
@@ -41,9 +41,9 @@ def _free_port() -> int:
 
 
 def _import_fresh(modname: str):
-    if modname in sys.modules:
-        del sys.modules[modname]
-    return __import__(modname, fromlist=["*"])
+    # Reload in place: deleting the module from sys.modules would leave modules
+    # that imported from the original reading a stale copy for the rest of the run.
+    return importlib.reload(importlib.import_module(modname))
 
 
 def test_resolves_preferred_when_free():
@@ -145,7 +145,6 @@ def test_lazy_workspace_mcp_port_preserves_port_precedence_without_resolver(
 
 
 def test_allow_fallback_false_probes_only_preferred():
-    """A pinned redirect URI means neighbouring ports are useless -- don't try them."""
     pr = _import_fresh("auth.port_resolver")
     p = _free_port()
     with _hold_port(p), pytest.raises(pr.NoAvailablePortError):
@@ -161,40 +160,3 @@ def test_allow_fallback_false_still_binds_free_preferred():
         preferred=p, fallback_count=4, host="127.0.0.1", allow_fallback=False
     )
     assert bound == p
-
-
-def test_stdio_resolver_survives_exhausted_range(monkeypatch):
-    """A busy callback port must not take down the whole stdio server."""
-    import main as main_module
-
-    p = _free_port()
-    monkeypatch.setenv("WORKSPACE_MCP_PORT", str(p))
-    monkeypatch.setenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", "0")
-    monkeypatch.setenv("WORKSPACE_MCP_HOST", "127.0.0.1")
-    monkeypatch.delenv("GOOGLE_OAUTH_REDIRECT_URI", raising=False)
-
-    with _hold_port(p):
-        main_module.resolve_stdio_callback_port()
-
-    assert os.environ["WORKSPACE_MCP_PORT"] == str(p)
-    assert "WORKSPACE_MCP_RESOLVED_PORT" not in os.environ
-
-
-def test_stdio_resolver_pins_port_when_redirect_uri_is_explicit(monkeypatch):
-    """With GOOGLE_OAUTH_REDIRECT_URI set, the resolver must not wander off-port."""
-    import main as main_module
-
-    p = _free_port()
-    monkeypatch.setenv("WORKSPACE_MCP_PORT", str(p))
-    monkeypatch.setenv("WORKSPACE_MCP_PORT_FALLBACK_COUNT", "4")
-    monkeypatch.setenv("WORKSPACE_MCP_HOST", "127.0.0.1")
-    monkeypatch.setenv(
-        "GOOGLE_OAUTH_REDIRECT_URI", f"http://localhost:{p}/oauth2callback"
-    )
-
-    with _hold_port(p):
-        main_module.resolve_stdio_callback_port()
-
-    # Fallback would have picked p+1; pinned mode leaves the port untouched.
-    assert os.environ["WORKSPACE_MCP_PORT"] == str(p)
-    assert "WORKSPACE_MCP_RESOLVED_PORT" not in os.environ

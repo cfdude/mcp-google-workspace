@@ -1,24 +1,12 @@
-"""
-Tests for send-as identity validation.
-
-users.messages.send does not reject a From header naming an address that is not a
-configured send-as identity -- Gmail silently substitutes the default sender and
-reports success. These cover the resulting contract: an unusable from_email raises
-instead, an alias Gmail has not explicitly rejected is honoured, and the alias's
-own display name fills in when the caller did not supply one.
-"""
+"""Tests for send-as identity validation in send_gmail_message and draft_gmail_message."""
 
 import base64
 from email import policy
 from email.parser import BytesParser
-import os
-import sys
 from unittest.mock import Mock
 
 from fastmcp.exceptions import ToolError
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from gmail.gmail_tools import draft_gmail_message, send_gmail_message
 
@@ -49,6 +37,11 @@ def _service_with_send_as(entries):
         "id": "draft_1"
     }
     return service
+
+
+def _sent_message(service):
+    kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
+    return _parse_raw_message(kwargs["body"]["raw"])
 
 
 PRIMARY = {
@@ -82,7 +75,6 @@ async def _send(service, **kwargs):
 
 @pytest.mark.asyncio
 async def test_send_rejects_an_alias_that_is_not_configured():
-    """An unconfigured From would be silently rewritten by Gmail, so refuse it."""
     service = _service_with_send_as([PRIMARY, ACCEPTED_ALIAS])
 
     with pytest.raises(ToolError) as exc:
@@ -90,10 +82,8 @@ async def test_send_rejects_an_alias_that_is_not_configured():
 
     message = str(exc.value)
     assert "nobody@example.com" in message
-    # The error must name what would have worked, or the caller is left guessing.
     assert "primary@example.com" in message
     assert "brand@example.com" in message
-    # Nothing may be sent once the identity is known to be wrong.
     service.users.return_value.messages.return_value.send.assert_not_called()
 
 
@@ -110,44 +100,47 @@ async def test_send_rejects_an_alias_still_pending_verification():
 
 
 @pytest.mark.asyncio
-async def test_send_allows_an_alias_with_no_verification_status():
-    """Absence of the field means 'not reported', not 'rejected'."""
+@pytest.mark.parametrize("status", [None, "verificationStatusUnspecified"])
+async def test_send_allows_an_alias_without_a_pending_status(status):
     unreported = {k: v for k, v in ACCEPTED_ALIAS.items() if k != "verificationStatus"}
+    if status:
+        unreported["verificationStatus"] = status
     service = _service_with_send_as([PRIMARY, unreported])
 
     await _send(service, from_email="brand@example.com")
 
-    kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
-    parsed = _parse_raw_message(kwargs["body"]["raw"])
-    assert "brand@example.com" in parsed["From"]
+    assert "brand@example.com" in _sent_message(service)["From"]
 
 
 @pytest.mark.asyncio
 async def test_send_skips_validation_when_send_as_settings_are_unreadable():
-    """Without gmail.settings.basic the list comes back empty; do not block the send.
-
-    An unverifiable alias is not the same as a known-bad one, and refusing here
-    would make the tool unusable for callers holding only gmail.send.
-    """
     service = _service_with_send_as([])
 
     await _send(service, from_email="whatever@example.com")
 
-    kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
-    parsed = _parse_raw_message(kwargs["body"]["raw"])
-    assert "whatever@example.com" in parsed["From"]
+    assert "whatever@example.com" in _sent_message(service)["From"]
+
+
+@pytest.mark.asyncio
+async def test_send_without_from_email_keeps_the_authenticated_sender():
+    default_alias = dict(ACCEPTED_ALIAS, isDefault=True, signature="Brand sig")
+    primary = dict(PRIMARY, isDefault=False, signature="Primary sig")
+    service = _service_with_send_as([primary, default_alias])
+
+    await _send(service)
+
+    sent = _sent_message(service)
+    assert sent["From"] == "primary@example.com"
+    assert "Primary sig" in sent.get_body().get_content()
 
 
 @pytest.mark.asyncio
 async def test_send_fills_the_display_name_from_the_chosen_alias():
-    """Picking an alias should not produce a bare address in the From header."""
     service = _service_with_send_as([PRIMARY, ACCEPTED_ALIAS])
 
     await _send(service, from_email="brand@example.com")
 
-    kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
-    parsed = _parse_raw_message(kwargs["body"]["raw"])
-    assert parsed["From"] == "Brand Team <brand@example.com>"
+    assert _sent_message(service)["From"] == "Brand Team <brand@example.com>"
 
 
 @pytest.mark.asyncio
@@ -156,9 +149,7 @@ async def test_send_prefers_an_explicit_from_name_over_the_alias_display_name():
 
     await _send(service, from_email="brand@example.com", from_name="Someone Else")
 
-    kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
-    parsed = _parse_raw_message(kwargs["body"]["raw"])
-    assert parsed["From"] == "Someone Else <brand@example.com>"
+    assert _sent_message(service)["From"] == "Someone Else <brand@example.com>"
 
 
 @pytest.mark.asyncio
@@ -177,3 +168,33 @@ async def test_draft_rejects_an_alias_that_is_not_configured():
 
     assert "brand@example.com" in str(exc.value)
     service.users.return_value.drafts.return_value.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_without_from_email_tolerates_an_unlisted_login_address():
+    login = dict(PRIMARY, sendAsEmail="login@example.com", signature="Login sig")
+    service = _service_with_send_as([login, ACCEPTED_ALIAS])
+
+    await _send(service)
+
+    sent = _sent_message(service)
+    assert sent["From"] == "primary@example.com"
+    assert "Login sig" in sent.get_body().get_content()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [send_gmail_message, draft_gmail_message])
+async def test_forward_rejects_an_alias_that_is_not_configured(tool):
+    service = _service_with_send_as([PRIMARY, ACCEPTED_ALIAS])
+
+    with pytest.raises(ToolError) as exc:
+        await _unwrap(tool)(
+            service=service,
+            user_google_email="primary@example.com",
+            to="recipient@example.com",
+            forward_message_id="orig_1",
+            from_email="nobody@example.com",
+        )
+
+    assert "nobody@example.com" in str(exc.value)
+    service.users.return_value.messages.return_value.get.assert_not_called()
