@@ -450,7 +450,7 @@ async def get_drive_file_content(
     annotations=ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
-        idempotentHint=True,
+        idempotentHint=False,
         openWorldHint=True,
     ),
 )
