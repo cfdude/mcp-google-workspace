@@ -80,6 +80,7 @@ from gmail.gmail_helpers import (
     _http_error_status,
     _is_email_reaction,
     _new_attachment_id,
+    _reject_entity_escaped_html_body,
     _retryable_result_ids,
     _signature_html_to_text,
     _wrap_signature_html,
@@ -2588,7 +2589,7 @@ async def send_gmail_message(
     body_format: Annotated[
         Literal["plain", "html"],
         Field(
-            description="Format of the body content (and of the prepended note when forwarding). Use 'plain' for plaintext or 'html' for HTML content.",
+            description="Format of the body content (and of the prepended note when forwarding). Use 'plain' for plaintext or 'html' for HTML content. With 'html', write real markup; an entity-escaped body ('&lt;div&gt;') is rejected.",
         ),
     ] = "plain",
     forward_message_id: Annotated[
@@ -2816,6 +2817,8 @@ async def send_gmail_message(
             include_forwarded_attachments=False
         )
     """
+    _reject_entity_escaped_html_body(body, body_format)
+
     # Forwarding reuses the original message's content, so it follows a dedicated
     # path that fetches and quotes the source message.
     if forward_message_id:
@@ -3171,7 +3174,7 @@ async def draft_gmail_message(
     body_format: Annotated[
         Literal["plain", "html"],
         Field(
-            description="Email body format. Use 'plain' for plaintext or 'html' for HTML content.",
+            description="Email body format. Use 'plain' for plaintext or 'html' for HTML content. With 'html', write real markup; an entity-escaped body ('&lt;div&gt;') is rejected.",
         ),
     ] = "plain",
     forward_message_id: Annotated[
@@ -3366,6 +3369,8 @@ async def draft_gmail_message(
             body="FYI - see below."
         )
     """
+    _reject_entity_escaped_html_body(body, body_format)
+
     if forward_message_id:
         (
             sender_email,
