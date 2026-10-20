@@ -77,7 +77,6 @@ from gmail.gmail_helpers import (
     _fetch_with_retry,
     _format_id_list,
     _get_send_as_identity_and_signature,
-    _get_send_as_signature_html_for_tool,
     _http_error_status,
     _is_email_reaction,
     _new_attachment_id,
@@ -2829,6 +2828,11 @@ async def send_gmail_message(
         logger.info(
             f"[send_gmail_message] Forwarding message '{forward_message_id}' for '{user_google_email}'"
         )
+        if from_email:
+            _, sender_display_name, _ = await _get_send_as_identity_and_signature(
+                service, from_email=from_email, fallback_email=user_google_email
+            )
+            from_name = from_name or sender_display_name or None
         return await _forward_gmail_message_impl(
             service=service,
             message_id=forward_message_id,
@@ -2867,9 +2871,21 @@ async def send_gmail_message(
         f"[send_gmail_message] Invoked. Email: '{user_google_email}', subject_len={len(subject) if subject else 0}, Attachments: {len(attachments) if attachments else 0}"
     )
 
-    # Prepare the email message
-    # Use from_email (Send As alias) if provided, otherwise default to authenticated user
     sender_email = from_email or user_google_email
+    sender_display_name = signature_html = ""
+    if include_signature:
+        (
+            _,
+            sender_display_name,
+            signature_html,
+        ) = await _get_send_as_identity_and_signature(
+            service,
+            from_email=sender_email,
+            fallback_email=user_google_email,
+            require_match=bool(from_email),
+        )
+    if from_email and not from_name:
+        from_name = sender_display_name or None
 
     # A reply's headers, recipients and quoted original are all derivable from the
     # thread, so a caller should not have to assemble them by hand. Mirrors
@@ -2899,14 +2915,6 @@ async def send_gmail_message(
     if not to:
         raise UserInputError(
             f"Could not derive a recipient from thread '{thread_id}'. Pass 'to' explicitly."
-        )
-
-    # Optionally append the Gmail signature from send-as settings, mirroring
-    # draft_gmail_message so sent mail respects the user's Settings > Signature.
-    signature_html = ""
-    if include_signature:
-        signature_html = await _get_send_as_signature_html_for_tool(
-            service, from_email=sender_email
         )
 
     if body_format == "html":
@@ -3359,11 +3367,15 @@ async def draft_gmail_message(
         )
     """
     if forward_message_id:
-        sender_email = from_email
-        if not sender_email:
-            sender_email, _ = await _get_send_as_identity_and_signature(
-                service, from_email=None, fallback_email=user_google_email
-            )
+        (
+            sender_email,
+            sender_display_name,
+            _,
+        ) = await _get_send_as_identity_and_signature(
+            service, from_email=from_email, fallback_email=user_google_email
+        )
+        if from_email and not from_name:
+            from_name = sender_display_name or None
         logger.info(
             f"[draft_gmail_message] Drafting forward of message '{forward_message_id}' for '{user_google_email}'"
         )
@@ -3398,16 +3410,19 @@ async def draft_gmail_message(
     # its signature is disabled. Otherwise resolve the identity and signature
     # together so Gmail's default sender and its signature stay aligned.
     if from_email and not include_signature:
-        sender_email, resolved_signature_html = from_email, ""
+        sender_email, sender_display_name, resolved_signature_html = from_email, "", ""
     else:
         (
             sender_email,
+            sender_display_name,
             resolved_signature_html,
         ) = await _get_send_as_identity_and_signature(
             service,
             from_email=from_email,
             fallback_email=user_google_email,
         )
+    if from_email and not from_name:
+        from_name = sender_display_name or None
     # Convert only the caller's body, before any signature or quoted original
     # is attached; see send_gmail_message.
     draft_body = html_newlines_to_br(body) if body_format == "html" else body
