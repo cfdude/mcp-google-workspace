@@ -1,8 +1,4 @@
-"""A mid-body failure must reach the client as a failed transfer, not a clean 200.
-
-Runs a real uvicorn server on a real socket: ASGI test clients hide this bug
-because they re-raise app errors instead of closing a connection.
-"""
+"""A mid-body failure must reach a real client as a failed transfer, not a clean 200."""
 
 import socket
 import threading
@@ -12,10 +8,12 @@ import httpx
 import pytest
 import uvicorn
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
 from auth.mcp_session_middleware import MCPSessionMiddleware
+from core.server import server
 
 CHUNK = b"x" * 65536
 
@@ -35,8 +33,6 @@ def _free_port() -> int:
 
 
 def _simple_app():
-    from starlette.middleware import Middleware
-
     return Starlette(
         routes=[
             Route("/mcp/stream-fail", _stream_then_fail),
@@ -47,9 +43,6 @@ def _simple_app():
 
 
 def _full_app():
-    """The real app (all production middleware) plus the failing routes."""
-    from core.server import server
-
     app = server.http_app()
     app.router.routes[:0] = [
         Route("/mcp/stream-fail", _stream_then_fail),
@@ -62,17 +55,17 @@ def _full_app():
 def live_server(request):
     app = request.param()
     port = _free_port()
-    server = uvicorn.Server(
+    live = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="critical")
     )
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(target=live.run, daemon=True)
     thread.start()
     deadline = time.time() + 10
-    while not server.started and time.time() < deadline:
+    while not live.started and time.time() < deadline:
         time.sleep(0.02)
-    assert server.started
+    assert live.started
     yield f"http://127.0.0.1:{port}"
-    server.should_exit = True
+    live.should_exit = True
     thread.join(timeout=10)
 
 

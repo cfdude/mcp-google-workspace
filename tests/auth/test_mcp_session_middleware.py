@@ -1,6 +1,7 @@
 """Behaviour of MCPSessionMiddleware, driven directly as an ASGI app."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -112,6 +113,19 @@ async def test_app_runs_exactly_once_when_it_raises():
     assert calls == [1]
 
 
+async def test_session_lookup_failure_runs_app_once_without_context(monkeypatch):
+    def fail(headers):
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(
+        "auth.mcp_session_middleware.extract_session_from_headers", fail
+    )
+    seen = []
+    sent = await _drive(_recording_app(seen), _scope(headers={"mcp-session-id": "x"}))
+    assert seen == [None]
+    assert sent[-1]["body"] == b"ok"
+
+
 async def test_non_mcp_path_is_passed_through_untouched():
     seen = []
     received = {}
@@ -134,7 +148,7 @@ async def test_non_mcp_path_is_passed_through_untouched():
 
 
 @pytest.mark.parametrize("type_", ["lifespan", "websocket"])
-async def test_non_http_scopes_pass_through(type_):
+async def test_non_http_scopes_pass_through(type_, caplog):
     got = []
 
     async def app(scope, receive, send):
@@ -143,6 +157,7 @@ async def test_non_http_scopes_pass_through(type_):
     scope = _scope(type_=type_, headers={"mcp-session-id": "abc"})
     await MCPSessionMiddleware(app)(scope, _receive, lambda m: None)
     assert got == [(scope, None)]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 async def test_streaming_response_is_not_buffered_and_keeps_context():

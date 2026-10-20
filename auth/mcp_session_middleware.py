@@ -3,12 +3,6 @@ MCP Session Middleware
 
 This middleware intercepts MCP requests and sets the session context
 for use by tool functions.
-
-It is a pure ASGI middleware, not a ``BaseHTTPMiddleware``: the latter runs the
-app in a separate task and ends the response body normally even if the app
-raised mid-stream, so a failed streamed download reached the client as a clean
-200 with a short body. Here the app is awaited directly and its errors
-propagate to the server unchanged.
 """
 
 import logging
@@ -88,7 +82,6 @@ class MCPSessionMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # Skip non-HTTP scopes and non-MCP paths without touching the stream.
         if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp"):
             await self.app(scope, receive, send)
             return
@@ -100,11 +93,8 @@ class MCPSessionMiddleware:
             )
             session_context = _build_session_context(request)
         except Exception as e:
-            # Failing to read session info must not fail the request.
             logger.error(f"Error in MCP session middleware: {e}")
             session_context = None
 
-        # The context is set and reset around the awaited app call in this task,
-        # so it covers streaming bodies. App errors propagate unchanged.
         with SessionContextManager(session_context):
             await self.app(scope, receive, send)
