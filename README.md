@@ -85,7 +85,7 @@ Full dependency tree in `pyproject.toml`, pinned in `uv.lock`.
 
 **For Legal & Procurement**
 
-This project is [MIT licensed](LICENSE) — not "open core," not "source available," not "free with a CLA." There is no dual licensing, no commercial tier gating features, and no contributor license agreement.
+This project is [MIT licensed](LICENSE) — 
 
 - **Use commercially without restriction** — build products, sell services, deploy internally
 - **Fork, embed, redistribute** — MIT requires only attribution
