@@ -11,14 +11,20 @@ import io
 
 from typing import Optional, List, Dict, Any
 from tempfile import NamedTemporaryFile, SpooledTemporaryFile
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import url2pathname
 from pathlib import Path
 
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
-from mcp.types import ToolAnnotations
+from fastmcp.tools import ToolResult
+from mcp.types import (
+    BlobResourceContents,
+    EmbeddedResource,
+    TextContent,
+    ToolAnnotations,
+)
 
 from auth.service_decorator import require_google_service
 from auth.oauth_config import is_stateless_mode
@@ -27,7 +33,9 @@ from core.file_limits import (
     FileTooLargeError,
     download_media_bytes,
     ensure_within_file_size_limit,
+    get_stateless_inline_max_bytes,
 )
+from core.gcs_attachment_storage import gcs_files_enabled
 from core.utils import (
     GOOGLE_API_WRITE_RETRIES,
     IMAGE_MIME_TYPES,
@@ -37,6 +45,7 @@ from core.utils import (
     encode_image_content,
     OfficeXmlExtractionError,
     OfficeXmlTooLargeError,
+    UserInputError,
     extract_office_xml_text,
     extract_pdf_text,
     handle_http_errors,
@@ -71,6 +80,7 @@ from gdrive.drive_helpers import (
     _use_resumable_upload,
     build_drive_list_params,
     check_public_link_permission,
+    flag_incomplete_search,
     list_all_permissions,
     derive_shared_state,
     format_permission_info,
@@ -78,11 +88,13 @@ from gdrive.drive_helpers import (
     has_explicit_trashed_clause,
     initiate_resumable_upload_session,
     native_replace_format_map,
+    normalize_drive_query_v2_compat,
     reject_sources_with_upload_url,
     resolve_drive_item,
     resolve_file_type_mime,
     resolve_folder_id,
     resumable_upload_result,
+    upload_url_hint,
     upload_url_not_offered_error,
     validate_expiration_time,
     validate_share_role,
@@ -90,6 +102,43 @@ from gdrive.drive_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _stateless_too_large_message(
+    file_name: str, file_id: str, size_bytes: int, mime_type: str, limit: int
+) -> str:
+    """Explain why a stateless-mode download was not returned inline."""
+    return "\n".join(
+        [
+            f"File: {file_name}",
+            f"File ID: {file_id}",
+            f"Size: {size_bytes / 1024:.1f} KB ({size_bytes} bytes)",
+            f"MIME Type: {mime_type}",
+            "",
+            "Not returned: stateless mode has no file storage, and this file "
+            f"exceeds the inline limit of {limit} bytes "
+            "(WORKSPACE_MCP_STATELESS_INLINE_MAX_BYTES, or "
+            "WORKSPACE_MCP_MAX_FILE_BYTES if lower). Use "
+            "get_drive_file_content for its text, or raise the limit.",
+        ]
+    )
+
+
+def _stateless_inline_disabled_message(
+    file_name: str, file_id: str, mime_type: str
+) -> str:
+    """Explain that stateless-mode downloads are not returned inline at all."""
+    return "\n".join(
+        [
+            f"File: {file_name}",
+            f"File ID: {file_id}",
+            f"MIME Type: {mime_type}",
+            "",
+            "Not returned: stateless mode has no file storage, and inline "
+            "returns are disabled (WORKSPACE_MCP_STATELESS_INLINE_MAX_BYTES=0). "
+            "Use get_drive_file_content for its text, or raise the limit.",
+        ]
+    )
 
 
 @server.tool(
@@ -133,7 +182,8 @@ async def search_drive_files(
         include_items_from_all_drives (bool): Whether shared drive items should be included in results. Defaults to True. This is effective when not specifying a `drive_id`.
         corpora (Optional[str]): Bodies of items to query (e.g., 'user', 'domain', 'drive', 'allDrives').
                                  If 'drive_id' is specified and 'corpora' is None, it defaults to 'drive'.
-                                 Otherwise, Drive API default behavior applies. Prefer 'user' or 'drive' over 'allDrives' for efficiency.
+                                 Otherwise it defaults to 'allDrives' when `include_items_from_all_drives` is True.
+                                 Pass 'user' to search only My Drive and files shared with the user.
         file_type (Optional[str]): Restrict results to a specific file type. Accepts a friendly
                                    name ('folder', 'document'/'doc', 'spreadsheet'/'sheet',
                                    'presentation'/'slides', 'form', 'drawing', 'pdf', 'shortcut',
@@ -163,13 +213,15 @@ async def search_drive_files(
     is_structured_query = any(pattern.search(query) for pattern in DRIVE_QUERY_PATTERNS)
 
     if is_structured_query:
-        final_query = query
-        logger.debug(
-            f"[search_drive_files] Using structured query as-is: '{final_query}'"
-        )
+        final_query = normalize_drive_query_v2_compat(query)
+        if final_query != query:
+            logger.info(
+                "[search_drive_files] Normalized v2 query field names to v3 equivalents"
+            )
+        logger.debug(f"[search_drive_files] Using structured query: '{final_query}'")
     else:
         # For free text queries, wrap in fullText contains
-        escaped_query = query.replace("'", "\\'")
+        escaped_query = query.replace("\\", "\\\\").replace("'", "\\'")
         final_query = f"fullText contains '{escaped_query}'"
         logger.debug(
             f"[search_drive_files] Reformatting free text query '{query}' to '{final_query}'"
@@ -203,10 +255,10 @@ async def search_drive_files(
 
     results = await asyncio.to_thread(service.files().list(**list_params).execute)
     files = results.get("files", [])
-    if not files:
-        return f"No files found for '{query}'."
-
     next_token = results.get("nextPageToken")
+    if not files and not next_token:
+        return flag_incomplete_search(f"No files found for '{query}'.", results)
+
     header = f"Found {len(files)} files for {user_google_email} matching '{query}':"
     formatted_files_text_parts = [header]
     for item in files:
@@ -255,8 +307,7 @@ async def search_drive_files(
             )
     if next_token:
         formatted_files_text_parts.append(f"nextPageToken: {next_token}")
-    text_output = "\n".join(formatted_files_text_parts)
-    return text_output
+    return flag_incomplete_search("\n".join(formatted_files_text_parts), results)
 
 
 @server.tool(
@@ -420,6 +471,9 @@ async def get_drive_file_download_url(
 
     In stdio mode, returns the local file path for direct access.
     In HTTP mode, returns a temporary download URL (valid for 1 hour).
+    In stateless mode (no file storage), returns the file itself as an embedded
+    resource, up to WORKSPACE_MCP_STATELESS_INLINE_MAX_BYTES (default 10 MiB,
+    and never more than WORKSPACE_MCP_MAX_FILE_BYTES when that is set).
 
     For Google native files (Docs, Sheets, Slides), exports to a useful format:
     - Google Docs -> PDF (default) or DOCX if export_format='docx'
@@ -447,7 +501,7 @@ async def get_drive_file_download_url(
     resolved_file_id, file_metadata = await resolve_drive_item(
         service,
         file_id,
-        extra_fields="name, webViewLink, mimeType",
+        extra_fields="name, webViewLink, mimeType, size",
     )
     file_id = resolved_file_id
     mime_type = file_metadata.get("mimeType", "")
@@ -507,33 +561,76 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".pdf"):
                 output_filename = f"{Path(output_filename).stem}.pdf"
 
-    # Stream the download straight to disk. The payload is never held in memory
-    # as a whole, so file size no longer bounds how much RAM this tool needs.
+    # Stateless mode has no attachment storage to hand out a URL from, so the
+    # file itself goes back as an embedded resource, up to inline_max_bytes.
+    # GCS staging supplies that storage, so the file goes there instead.
+    inline_max_bytes = (
+        get_stateless_inline_max_bytes()
+        if is_stateless_mode() and not gcs_files_enabled()
+        else None
+    )
+    if inline_max_bytes == 0:
+        return _stateless_inline_disabled_message(file_name, file_id, output_mime_type)
+    # Drive's declared size is the download size only for binary files; an
+    # export's size is unknown until it has been downloaded.
+    declared_size = int(file_metadata.get("size") or 0)
+    if (
+        inline_max_bytes is not None
+        and not export_mime_type
+        and declared_size > inline_max_bytes
+    ):
+        return _stateless_too_large_message(
+            file_name, file_id, declared_size, output_mime_type, inline_max_bytes
+        )
+
+    # Stream the download straight to disk. Outside the capped stateless inline
+    # return, the payload is never held in memory as a whole.
     tmp_path = await _download_file_to_temp(service, file_id, export_mime_type)
     size_bytes = tmp_path.stat().st_size
     size_kb = size_bytes / 1024 if size_bytes else 0
 
-    # Check if we're in stateless mode (can't save files)
-    if is_stateless_mode():
+    if inline_max_bytes is not None:
         try:
-            with tmp_path.open("rb") as preview_fh:
-                preview_bytes = preview_fh.read(100)
+            if size_bytes > inline_max_bytes:
+                return _stateless_too_large_message(
+                    file_name, file_id, size_bytes, output_mime_type, inline_max_bytes
+                )
+            with tmp_path.open("rb") as fh:
+                payload = fh.read()
         finally:
             tmp_path.unlink(missing_ok=True)
-        result_lines = [
-            "File downloaded successfully!",
-            f"File: {file_name}",
-            f"File ID: {file_id}",
-            f"Size: {size_kb:.1f} KB ({size_bytes} bytes)",
-            f"MIME Type: {output_mime_type}",
-            "\n⚠️ Stateless mode: File storage disabled.",
-            "\nBase64-encoded content (first 100 characters shown):",
-            f"{base64.b64encode(preview_bytes).decode('utf-8')}...",
-        ]
-        logger.info(
-            f"[get_drive_file_download_url] Successfully downloaded {size_kb:.1f} KB file (stateless mode)"
+        summary = "\n".join(
+            [
+                "File downloaded successfully!",
+                f"File: {file_name}",
+                f"File ID: {file_id}",
+                f"Size: {size_kb:.1f} KB ({size_bytes} bytes)",
+                f"MIME Type: {output_mime_type}",
+                "\nStateless mode: the file is attached to this result as an "
+                f"embedded resource ({output_filename}).",
+            ]
         )
-        return "\n".join(result_lines)
+        if export_mime_type:
+            summary += (
+                f"\n\nNote: Google native file exported to {output_mime_type} format."
+            )
+        logger.info(
+            f"[get_drive_file_download_url] Returned {size_kb:.1f} KB inline (stateless mode)"
+        )
+        return ToolResult(
+            content=[
+                TextContent(type="text", text=summary),
+                EmbeddedResource(
+                    type="resource",
+                    resource=BlobResourceContents(
+                        uri=f"gdrive://{file_id}/{quote(output_filename)}",
+                        mimeType=output_mime_type or "application/octet-stream",
+                        blob=base64.b64encode(payload).decode("ascii"),
+                    ),
+                ),
+            ],
+            structured_content={"result": summary},
+        )
 
     # Move the download into attachment storage and return its path/URL
     try:
@@ -562,7 +659,7 @@ async def get_drive_file_download_url(
                 "\nThe file has been saved to disk and can be accessed directly via the file path."
             )
         else:
-            download_url = get_attachment_url(result.file_id)
+            download_url = await asyncio.to_thread(get_attachment_url, result.file_id)
             result_lines.append(f"\n📎 Download URL: {download_url}")
             result_lines.append("\nThe file will expire after 1 hour.")
 
@@ -628,7 +725,7 @@ async def list_drive_items(
         page_token (Optional[str]): Page token from a previous response's nextPageToken to retrieve the next page of results.
         drive_id (Optional[str]): ID of the shared drive. If provided, the listing is scoped to this drive.
         include_items_from_all_drives (bool): Whether items from all accessible shared drives should be included if `drive_id` is not set. Defaults to True.
-        corpora (Optional[str]): Corpus to query ('user', 'drive', 'allDrives'). If `drive_id` is set and `corpora` is None, 'drive' is used. If None and no `drive_id`, API defaults apply.
+        corpora (Optional[str]): Corpus to query ('user', 'drive', 'allDrives'). If `drive_id` is set and `corpora` is None, 'drive' is used. If None and no `drive_id`, 'allDrives' is used when `include_items_from_all_drives` is True.
         file_type (Optional[str]): Restrict results to a specific file type. Accepts a friendly
                                    name ('folder', 'document'/'doc', 'spreadsheet'/'sheet',
                                    'presentation'/'slides', 'form', 'drawing', 'pdf', 'shortcut',
@@ -691,10 +788,12 @@ async def list_drive_items(
 
     results = await asyncio.to_thread(service.files().list(**list_params).execute)
     files = results.get("files", [])
-    if not files:
-        return f"No items found in folder '{folder_id}'."
-
     next_token = results.get("nextPageToken")
+    if not files and not next_token:
+        return flag_incomplete_search(
+            f"No items found in folder '{folder_id}'.", results
+        )
+
     header = (
         f"Found {len(files)} items in folder '{folder_id}' for {user_google_email}:"
     )
@@ -734,8 +833,7 @@ async def list_drive_items(
             )
     if next_token:
         formatted_items_text_parts.append(f"nextPageToken: {next_token}")
-    text_output = "\n".join(formatted_items_text_parts)
-    return text_output
+    return flag_incomplete_search("\n".join(formatted_items_text_parts), results)
 
 
 @server.tool(
@@ -803,6 +901,8 @@ async def create_drive_file(
     """
     Creates a new file in Google Drive, supporting creation within shared drives.
     Accepts direct text content, inline base64 bytes, or a fileUrl to fetch content from.
+    Where local file access is disabled it can instead return an upload URL for the
+    caller to PUT file bytes to.
     This stores the supplied bytes without converting them to Google Docs, Sheets, or
     Slides. Use the matching import_to_google_* tool for Google-native conversion.
 
@@ -812,7 +912,7 @@ async def create_drive_file(
         content (Optional[str]): If provided, the content to write to the file.
         folder_id (str): The ID of the parent folder. Defaults to 'root'. For shared drives, this must be a folder ID within the shared drive.
         mime_type (Optional[str]): The MIME type of the file. Defaults to 'text/plain'; required with return_upload_url.
-        fileUrl (Optional[str]): If provided, fetches the file content from this URL. Supports file://, http://, and https:// protocols.
+        fileUrl (Optional[str]): If provided, fetches the file content from this URL. Supports http:// and https://; file:// only where local file access is enabled. Where it is disabled, files on the caller's machine go through an upload URL instead (see the upload-URL parameter, if offered).
         base64_content (Optional[str]): Standard base64-encoded file bytes.
         content_mime_type (Optional[str]): MIME type for base64_content uploads.
         base64_sha256 (Optional[str]): Expected SHA-256 of decoded base64_content. Recommended for binary payload integrity checks.
@@ -960,6 +1060,14 @@ async def create_drive_file(
         # Check if this is a file:// URL
         parsed_url = urlparse(fileUrl)
         if parsed_url.scheme == "file":
+            if not local_file_access_enabled():
+                raise UserInputError(
+                    "Local file access is disabled on this server: file paths "
+                    "resolve on the server's filesystem, not the caller's. "
+                    "Provide the file by http(s) URL or as inline content "
+                    f"instead. {upload_url_hint('mime_type')}"
+                )
+
             # Handle file:// URL - read from local filesystem
             logger.info(
                 "[create_drive_file] Detected file:// URL, reading from local filesystem"
@@ -1041,7 +1149,7 @@ async def create_drive_file(
                         await asyncio.to_thread(spool.write, chunk)
 
                     _total, content_type = await _stream_url_with_validation(
-                        fileUrl, _write_spool
+                        fileUrl, _write_spool, upload_type_param="mime_type"
                     )
                     await asyncio.to_thread(spool.seek, 0)
 
@@ -1079,7 +1187,7 @@ async def create_drive_file(
                         await asyncio.to_thread(temp_file.write, chunk)
 
                     total_bytes, content_type = await _stream_url_with_validation(
-                        fileUrl, _write_chunk
+                        fileUrl, _write_chunk, upload_type_param="mime_type"
                     )
 
                     logger.info(
@@ -2022,6 +2130,7 @@ async def update_drive_file(
                     if format_map
                     else (target_mime_type or "application/octet-stream")
                 ),
+                upload_type_param="mime_type",
             )
             query_params["media_body"] = media
 
@@ -2739,19 +2848,9 @@ async def set_drive_file_permissions(
     # Handle link sharing via permissions API
     if link_sharing is not None:
         current_permissions = await asyncio.to_thread(
-            service.permissions()
-            .list(
-                fileId=file_id,
-                supportsAllDrives=True,
-                fields="permissions(id, type, role)",
-            )
-            .execute
+            list_all_permissions, service, file_id
         )
-        anyone_perms = [
-            p
-            for p in current_permissions.get("permissions", [])
-            if p.get("type") == "anyone"
-        ]
+        anyone_perms = [p for p in current_permissions if p.get("type") == "anyone"]
 
         if link_sharing == "off":
             if anyone_perms:
