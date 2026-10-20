@@ -1025,29 +1025,9 @@ def _find_send_as_entry(
     )
 
 
-def _accepted_send_as_emails(send_as_entries: List[Dict[str, Any]]) -> List[str]:
-    """
-    Addresses Gmail will actually honour in a From header.
-
-    An entry is usable unless Gmail explicitly reports it as not yet verified.
-    A missing verificationStatus is treated as usable rather than as a failure:
-    the primary address never carries one, and the field is not guaranteed on
-    every entry, so absence means "not reported", not "rejected".
-    """
-    return [
-        email
-        for entry in send_as_entries
-        if (email := (entry.get("sendAsEmail") or "").strip())
-        and _send_as_entry_is_usable(entry)
-    ]
-
-
 def _send_as_entry_is_usable(entry: Dict[str, Any]) -> bool:
-    """True unless Gmail explicitly reports this send-as entry as unverified."""
-    if entry.get("isPrimary"):
-        return True
-    status = entry.get("verificationStatus")
-    return not status or status == "accepted"
+    """True unless Gmail reports this send-as entry as pending verification."""
+    return entry.get("verificationStatus") != "pending"
 
 
 async def _get_send_as_identity_and_signature(
@@ -1055,31 +1035,25 @@ async def _get_send_as_identity_and_signature(
     from_email: Optional[str],
     fallback_email: str,
 ) -> tuple[str, str, str]:
-    """
-    Resolve the send-as identity, refusing an alias Gmail would silently discard.
+    """Resolve (sender_email, display_name, signature_html) for a send-as identity.
 
-    Returns (sender_email, display_name, signature_html).
-
-    users.messages.send does NOT reject a From header naming an unconfigured
-    address -- it quietly substitutes the default sender and reports success. A
-    caller asking for one identity and getting another, with no error, is the
-    worst available outcome, so an unusable from_email raises here instead,
-    naming the addresses that would have worked.
-
-    When the send-as list cannot be read at all (no gmail.settings.basic scope --
-    _get_send_as_entries returns [] for that case by design) validation is skipped
-    rather than blocking the send: an unverifiable alias is not a known-bad one.
+    Raises when from_email is not a usable send-as address, since Gmail would
+    silently send from the default address instead. Validation is skipped when
+    the send-as list is unreadable.
     """
     send_as_entries = await _get_send_as_entries(service)
     selected_entry = None
 
     if from_email:
         if not send_as_entries:
-            # Nothing to validate against; preserve the caller's intent.
             return from_email, "", ""
         selected_entry = _find_send_as_entry(send_as_entries, from_email)
         if selected_entry is None or not _send_as_entry_is_usable(selected_entry):
-            accepted = _accepted_send_as_emails(send_as_entries)
+            accepted = [
+                entry.get("sendAsEmail", "")
+                for entry in send_as_entries
+                if _send_as_entry_is_usable(entry)
+            ]
             raise ToolExecutionError(
                 f"'{from_email}' is not an accepted 'Send mail as' address for this "
                 f"mailbox, and Gmail would silently send from the default address "

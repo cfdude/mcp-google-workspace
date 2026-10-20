@@ -2311,7 +2311,7 @@ async def test_send_gmail_message_rejects_an_unresolvable_thread_id():
     with pytest.raises(UserInputError, match="not a valid Gmail API"):
         await _unwrap(send_gmail_message)(
             service=mock_service,
-            user_google_email="primary@example.com",
+            user_google_email="user@example.com",
             to="recipient@example.com",
             subject="Re: hello",
             body="Body",
