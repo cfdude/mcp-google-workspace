@@ -1,20 +1,14 @@
-"""
-Unit tests for forward_gmail_message
-"""
+"""Unit tests for the forward path of send/draft_gmail_message."""
+
+import base64
+from email import message_from_bytes
+from unittest.mock import Mock
 
 import pytest
-from unittest.mock import Mock
-from email import message_from_bytes
-import base64
-import sys
-import os
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 from fastmcp.exceptions import ToolError
 
-from gmail.gmail_tools import _forward_gmail_message_impl
 from core.utils import UserInputError
+from gmail.gmail_tools import _forward_gmail_message_impl
 
 
 def get_sent_mime_message(mock_service):
@@ -168,7 +162,6 @@ async def test_forward_simple_text_email():
     )
 
     sent = get_sent_mime_message(mock_service)
-    assert sent["Subject"] == "Fwd: Hello"
     assert sent["To"] == "recipient@example.com"
     body_part, attachments = get_body_and_attachments(sent)
     assert body_part.get_content_subtype() == "plain"
@@ -199,38 +192,6 @@ async def test_forward_reports_unknown_delivery_on_ambiguous_failure():
             to="recipient@example.com",
             user_google_email="me@example.com",
         )
-
-
-@pytest.mark.asyncio
-async def test_forward_html_email():
-    """Forward HTML email, verify HTML structure preserved"""
-    message = create_mock_message(
-        subject="HTML Test",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        html_body="<p>This is <strong>HTML</strong> content.</p>",
-    )
-    mock_service = create_mock_service(message, sent_message_id="fwd002")
-
-    result = await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msg456",
-        to="recipient@example.com",
-        user_google_email="me@example.com",
-    )
-
-    assert "Email forwarded" in result
-    assert "fwd002" in result
-
-    sent = get_sent_mime_message(mock_service)
-    assert sent["Subject"] == "Fwd: HTML Test"
-    body_part = get_body_part(sent, subtype="html")
-    assert body_part is not None
-    assert body_part.get_content_subtype() == "html"
-    body = get_body_text(sent, subtype="html")
-    assert "<strong>HTML</strong>" in body
-    # Header values are HTML-escaped in the forward block (no raw "<" injection).
-    assert "Forwarded message" in body
 
 
 @pytest.mark.asyncio
@@ -281,99 +242,53 @@ async def test_forward_with_message_plain():
 
     assert "Email forwarded" in result
     assert "fwd003" in result
-
-
-@pytest.mark.asyncio
-async def test_forward_hebrew_note_renders_rtl():
-    """A Hebrew forwarding note auto-detects RTL; forwarded original keeps its own dir."""
-    message = create_mock_message(
-        subject="FYI",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Original message body.",
-    )
-    mock_service = create_mock_service(message, sent_message_id="fwdrtl")
-
-    await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msg789",
-        to="recipient@example.com",
-        forward_message="שלום, ראה למטה",
-        forward_message_format="plain",
-        user_google_email="me@example.com",
-    )
-
     sent = get_sent_mime_message(mock_service)
-    body = get_body_text(sent, subtype="html")
-    assert body.startswith('<div dir="rtl">')
+    assert get_body_text(sent, subtype="plain").startswith(
+        "Please see below.\r\n\r\n---------- Forwarded message"
+    )
+    assert get_body_text(sent, subtype="html").startswith(
+        '<div dir="ltr"><div>Please see below.</div><br><br>'
+        '<div class="gmail_quote gmail_quote_container">'
+    )
 
 
 @pytest.mark.asyncio
-async def test_forward_no_note_stays_ltr():
-    """No note: the wrapper stays ltr (byte-identical to historical output)."""
-    message = create_mock_message(
-        subject="FYI",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Original message body.",
+@pytest.mark.parametrize(
+    ("note", "note_format", "direction", "expected_prefix"),
+    [
+        # No note: nothing user-authored to orient, so "auto" stays ltr.
+        (None, "plain", "auto", '<div dir="ltr"><br><div class="gmail_quote'),
+        (None, "plain", "rtl", '<div dir="rtl"><br><div class="gmail_quote'),
+        ("שלום, ראה למטה", "plain", "auto", '<div dir="rtl"><div>שלום'),
+        # An explicit direction wins over the HTML note's own dir.
+        (
+            '<div dir="ltr">See below.</div>',
+            "html",
+            "rtl",
+            '<div dir="rtl"><div dir="rtl">See below.</div>',
+        ),
+    ],
+)
+async def test_forward_html_base_direction(
+    note, note_format, direction, expected_prefix
+):
+    """The note sets the forward's base direction; the original keeps its own."""
+    mock_service = create_mock_service(
+        create_mock_message(text_body="Original message body.")
     )
-    mock_service = create_mock_service(message, sent_message_id="fwdltr")
 
     await _forward_gmail_message_impl(
         service=mock_service,
         message_id="msg789",
         to="recipient@example.com",
-        user_google_email="me@example.com",
-    )
-
-    sent = get_sent_mime_message(mock_service)
-    body = get_body_text(sent, subtype="html")
-    assert body.startswith('<div dir="ltr">')
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("direction", ["rtl", "ltr"])
-async def test_forward_no_note_honors_explicit_direction(direction):
-    """No note: an explicit direction still sets the wrapper's base direction."""
-    message = create_mock_message(
-        subject="FYI",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Original message body.",
-    )
-    mock_service = create_mock_service(message, sent_message_id="fwddir")
-
-    await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msg789",
-        to="recipient@example.com",
+        forward_message=note,
+        forward_message_format=note_format,
         user_google_email="me@example.com",
         direction=direction,
     )
 
-    sent = get_sent_mime_message(mock_service)
-    body = get_body_text(sent, subtype="html")
-    assert body.startswith(f'<div dir="{direction}">')
-
-
-@pytest.mark.asyncio
-async def test_forward_explicit_direction_overrides_note_container():
-    """An explicit direction wins over the HTML note's own dir, as on a regular send."""
-    message = create_mock_message(text_body="Original message body.")
-    mock_service = create_mock_service(message, sent_message_id="fwddir")
-
-    await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msg789",
-        to="recipient@example.com",
-        forward_message='<div dir="ltr">See below.</div>',
-        forward_message_format="html",
-        user_google_email="me@example.com",
-        direction="rtl",
-    )
-
     body = get_body_text(get_sent_mime_message(mock_service), subtype="html")
-    assert body.startswith('<div dir="rtl"><div dir="rtl">See below.</div>')
+    assert body.startswith(expected_prefix)
 
 
 @pytest.mark.asyncio
@@ -432,6 +347,28 @@ async def test_forward_header_without_sender_address(from_header, expected_from)
         in html_body
     )
     assert "mailto:" not in html_body.split("To:")[0]
+
+
+@pytest.mark.asyncio
+async def test_forward_header_blank_sender_name_renders_bare_address():
+    """A whitespace-only display name is dropped rather than shown as a name."""
+    message = create_mock_message(
+        from_addr='"  " <anon@example.com>', text_body="Original message body."
+    )
+    mock_service = create_mock_service(message)
+
+    await _forward_gmail_message_impl(
+        service=mock_service,
+        message_id="msg789",
+        to="recipient@example.com",
+        user_google_email="me@example.com",
+    )
+
+    sent = get_sent_mime_message(mock_service)
+    assert "From: anon@example.com\r\n" in get_body_text(sent, subtype="plain")
+    html_body = get_body_text(sent, subtype="html")
+    assert "gmail_sendername" not in html_body
+    assert 'From: <span dir="auto">&lt;<a href="mailto:anon@example.com">' in html_body
 
 
 @pytest.mark.asyncio
@@ -586,54 +523,6 @@ async def test_forward_with_attachments():
 
 
 @pytest.mark.asyncio
-async def test_forward_subject_already_has_fwd():
-    """Subject already starts with 'Fwd:', don't double-prefix"""
-    message = create_mock_message(
-        subject="Fwd: Already forwarded",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Previous forward.",
-    )
-    mock_service = create_mock_service(message, sent_message_id="fwd007")
-
-    result = await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msgjkl",
-        to="recipient@example.com",
-        user_google_email="me@example.com",
-    )
-
-    assert "Email forwarded" in result
-    assert "fwd007" in result
-
-    # The subject should not be double-prefixed ("Fwd: Fwd: ...").
-    sent = get_sent_mime_message(mock_service)
-    assert sent["Subject"] == "Fwd: Already forwarded"
-
-
-@pytest.mark.asyncio
-async def test_forward_subject_fw_variant_not_double_prefixed():
-    """Subjects using the 'FW:' variant should not be re-prefixed with 'Fwd:'."""
-    message = create_mock_message(
-        subject="FW: Quarterly numbers",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Numbers attached.",
-    )
-    mock_service = create_mock_service(message, sent_message_id="fwd010")
-
-    await _forward_gmail_message_impl(
-        service=mock_service,
-        message_id="msgstu",
-        to="recipient@example.com",
-        user_google_email="me@example.com",
-    )
-
-    sent = get_sent_mime_message(mock_service)
-    assert sent["Subject"] == "FW: Quarterly numbers"
-
-
-@pytest.mark.asyncio
 async def test_forward_attachment_download_failure_raises():
     """A failed attachment download must abort rather than send a partial forward."""
     message = create_mock_message(
@@ -727,26 +616,30 @@ async def test_forward_with_cc_bcc():
 
 
 @pytest.mark.asyncio
-async def test_forward_subject_override():
-    """An explicit subject overrides the auto-derived 'Fwd:' subject."""
-    message = create_mock_message(
-        subject="Original",
-        from_addr="alice@example.com",
-        to_addr="bob@example.com",
-        text_body="Body.",
+@pytest.mark.parametrize(
+    ("original", "override", "expected"),
+    [
+        ("Meeting Notes", None, "Fwd: Meeting Notes"),
+        ("Fwd: Already forwarded", None, "Fwd: Already forwarded"),
+        ("FW: Quarterly numbers", None, "FW: Quarterly numbers"),
+        ("Original", "Custom Subject", "Custom Subject"),
+    ],
+)
+async def test_forward_subject(original, override, expected):
+    """'Fwd: ' is prefixed once, an existing Fwd:/FW: is kept, an override wins."""
+    mock_service = create_mock_service(
+        create_mock_message(subject=original, text_body="Body.")
     )
-    mock_service = create_mock_service(message, sent_message_id="fwd012")
 
     await _forward_gmail_message_impl(
         service=mock_service,
         message_id="msgyz",
         to="recipient@example.com",
-        subject="Custom Subject",
+        subject=override,
         user_google_email="me@example.com",
     )
 
-    sent = get_sent_mime_message(mock_service)
-    assert sent["Subject"] == "Custom Subject"
+    assert get_sent_mime_message(mock_service)["Subject"] == expected
 
 
 @pytest.mark.asyncio

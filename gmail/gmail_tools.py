@@ -72,8 +72,7 @@ from gmail.gmail_helpers import (
     THREAD_REPLY_CONTEXT_FIELDS,
     _analyze_thread_ownership_impl,
     _build_forward_content,
-    _build_web_reply_bodies,
-    _derive_web_bodies,
+    _build_web_compose_raw,
     _derive_reply_all_recipients,
     _derive_reply_headers,
     _fetch_with_retry,
@@ -84,6 +83,7 @@ from gmail.gmail_helpers import (
     _new_attachment_id,
     _prepare_gmail_message_web,
     _reject_entity_escaped_html_body,
+    _reply_subject,
     _retryable_result_ids,
     _signature_html_to_text,
     _wrap_signature_html,
@@ -97,6 +97,7 @@ from gmail.gmail_helpers import (
     send_message_once,
     update_gmail_filter,
 )
+from gmail.gmail_web_mime import TextDirection
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,11 @@ GMAIL_SEARCH_HEADER_BATCH_SIZE = 10
 GMAIL_REQUEST_DELAY = 0.1
 GMAIL_RATE_LIMIT_BACKOFF = 2.0
 HTML_BODY_TRUNCATE_LIMIT = 20000
+DIRECTION_DESCRIPTION = (
+    "Base text direction of the body. 'auto' (default) takes it from the first "
+    "strong character (a right-to-left script gives 'rtl', anything else 'ltr'); "
+    "'ltr'/'rtl' force it. On a forward it orients the note."
+)
 
 # Keep ``None`` valid at runtime without publishing it as an ``anyOf`` branch.
 # Cowork needs a top-level array schema, while Moonshot rejects the previous
@@ -674,7 +680,7 @@ def _build_quoted_reply_body(
     reply_body: str,
     body_format: Literal["plain", "html"],
     signature_html: str,
-    original: dict,
+    original: Dict[str, Any],
 ) -> str:
     """Assemble reply body + signature + quoted original message.
 
@@ -688,10 +694,11 @@ def _build_quoted_reply_body(
         On {date}, {sender} wrote:
         > quoted original
     """
+    sender = original.get("from") or "unknown"
     if original.get("date"):
-        attribution = f"On {original['date']}, {original['sender']} wrote:"
+        attribution = f"On {original['date']}, {sender} wrote:"
     else:
-        attribution = f"{original['sender']} wrote:"
+        attribution = f"{sender} wrote:"
 
     if body_format == "html":
         # Signature
@@ -1294,53 +1301,6 @@ async def _resolve_url_attachments(
     return resolved
 
 
-def _build_web_compose_raw(
-    *,
-    subject: str,
-    body: str,
-    body_format: Literal["plain", "html"],
-    to: Optional[str],
-    cc: Optional[str],
-    bcc: Optional[str],
-    from_email: str,
-    from_name: Optional[str],
-    in_reply_to: Optional[str],
-    references: Optional[str],
-    direction: Literal["auto", "ltr", "rtl"],
-    reply_target: Optional[Dict[str, Any]],
-) -> str:
-    """Assemble a Gmail-web faithful raw message for the send/draft tools.
-
-    Builds both body parts from ``body`` (Gmail's typed ``<div>`` structure for
-    plain text, the ltr container for HTML) and delegates the deterministic MIME
-    assembly to ``_prepare_gmail_message``'s web path. The reply ``Re:`` subject
-    prefix is applied there, exactly as on the legacy path. ``direction`` is the
-    base text direction; ``"auto"`` detects it from the body text. When
-    ``reply_target`` (the parent message from the thread reply context, with
-    bodies) is given, Gmail's ``gmail_quote`` reply trail is appended to both
-    parts.
-    """
-    new_plain, new_html = _derive_web_bodies(body, body_format, direction)
-
-    if reply_target:
-        new_plain, new_html = _build_web_reply_bodies(new_plain, new_html, reply_target)
-
-    raw_message, _thread, _count, _errors = _prepare_gmail_message(
-        subject=subject,
-        body=new_plain,
-        html_body=new_html,
-        to=to,
-        cc=cc,
-        bcc=bcc,
-        in_reply_to=in_reply_to,
-        references=references,
-        from_email=from_email,
-        from_name=from_name,
-        web_compose=True,
-    )
-    return raw_message
-
-
 def _prepare_gmail_message(
     subject: str,
     body: str,
@@ -1354,22 +1314,9 @@ def _prepare_gmail_message(
     from_email: Optional[str] = None,
     from_name: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
-    web_compose: bool = False,
-    html_body: Optional[str] = None,
-    direction: Literal["auto", "ltr", "rtl"] = "auto",
 ) -> tuple[str, Optional[str], int, List[str]]:
     """
     Prepare a Gmail message with threading and attachment support.
-
-    When ``web_compose`` is True the message is assembled to be byte-faithful
-    to a Gmail-web compose via ``_prepare_gmail_message_web``. ``body`` is the
-    fully-assembled text/plain content and ``html_body`` the fully-assembled
-    text/html content; when ``html_body`` is omitted it is derived from
-    ``body``. ``to``/``cc``/``bcc`` are expected pre-formatted
-    (``Display Name <addr>``); ``from`` is formatted here from ``from_email`` +
-    optional ``from_name``. ``direction`` sets the base text direction of a
-    derived HTML part (``"auto"`` detects it from ``body``). The web path does
-    not carry attachments.
 
     Args:
         subject: Email subject
@@ -1389,48 +1336,16 @@ def _prepare_gmail_message(
         Tuple of (raw_message, thread_id, attached_count, attachment_errors)
         where raw_message is base64 encoded.
     """
-    # Handle reply subject formatting
-    reply_subject = subject
-    if in_reply_to and not subject.lower().startswith("re:"):
-        reply_subject = f"Re: {subject}"
-
     # Prepare the email
     normalized_format = body_format.lower()
     if normalized_format not in {"plain", "html"}:
         raise ValueError("body_format must be either 'plain' or 'html'.")
 
-    # Gmail-web faithful path: build MIME by hand so charset casing, boundary
-    # shape, and part ordering match a real web compose.
-    if web_compose:
-        # When the caller did not supply an HTML part, derive it from ``body``
-        # so the path still yields both parts.
-        if html_body is not None:
-            plain_part = body
-            html_part = html_body
-        else:
-            plain_part, html_part = _derive_web_bodies(
-                body, normalized_format, direction
-            )
-
-        raw_message = _prepare_gmail_message_web(
-            subject=reply_subject,
-            plain_body=plain_part,
-            html_body=html_part,
-            to=to,
-            cc=cc,
-            bcc=bcc,
-            in_reply_to=in_reply_to,
-            references=references,
-            from_email=from_email,
-            from_name=from_name,
-        )
-        return raw_message, thread_id, 0, []
-
     attached_count = 0
     attachment_errors: List[str] = []
     message = EmailMessage(policy=SMTP)
 
-    message["Subject"] = reply_subject
+    message["Subject"] = _reply_subject(subject, in_reply_to)
 
     # Add sender if provided
     if from_email:
@@ -2720,10 +2635,7 @@ async def send_gmail_message(
         ),
     ] = True,
     direction: Annotated[
-        Literal["auto", "ltr", "rtl"],
-        Field(
-            description="Base text direction for the composed body. 'auto' (default) detects it from the body via the Unicode bidi first-strong-character rule (a right-to-left script \u2192 right-to-left, otherwise left-to-right); 'ltr'/'rtl' force it. Embedded opposite-direction runs (Latin words, numerals) always render correctly via the browser's bidi algorithm. Note: this orients the HTML body via a dir attribute, matching Gmail web's bare-fragment output. Some clients (e.g. Spark iOS) ignore dir on a wrapperless fragment and render right-to-left text left-aligned; this is a client-side limitation that likewise affects real Gmail-web-composed RTL mail.",
-        ),
+        TextDirection, Field(description=DIRECTION_DESCRIPTION)
     ] = "auto",
     quote_original: Annotated[
         bool,
@@ -2901,9 +2813,12 @@ async def send_gmail_message(
             raise UserInputError(
                 "'to' is required when forwarding via 'forward_message_id'."
             )
+        logger.info(
+            f"[send_gmail_message] Forwarding message '{forward_message_id}' for '{user_google_email}'"
+        )
         # An explicit alias is always validated. Otherwise the Send-As
-        # displayName fallback is only looked up when signatures are enabled,
-        # so the settings endpoint stays optional, as on a regular send.
+        # displayName is only looked up when signatures are enabled, so the
+        # settings endpoint stays optional, as on a regular send.
         if from_email or (include_signature and not from_name):
             _, sender_display_name, _ = await _get_send_as_identity_and_signature(
                 service,
@@ -2912,9 +2827,6 @@ async def send_gmail_message(
                 require_match=bool(from_email),
             )
             from_name = from_name or sender_display_name or None
-        logger.info(
-            f"[send_gmail_message] Forwarding message '{forward_message_id}' for '{user_google_email}'"
-        )
         return await _forward_gmail_message_impl(
             service=service,
             message_id=forward_message_id,
@@ -2954,13 +2866,9 @@ async def send_gmail_message(
         f"[send_gmail_message] Invoked. Email: '{user_google_email}', subject_len={len(subject) if subject else 0}, Attachments: {len(attachments) if attachments else 0}"
     )
 
-    # Optionally append the Gmail signature from send-as settings, mirroring
-    # draft_gmail_message so sent mail respects the user's Settings > Signature.
-    # The send-as entry carries both the signature and the displayName Gmail web
-    # renders in the From line (the sender's own name is not in contacts, so
-    # Send-As is the right source). With signatures disabled the settings
-    # endpoint is never touched (no gmail.settings.basic requirement) and From
-    # stays the bare address unless from_name is given.
+    # The Send-As entry carries both the signature and the displayName Gmail web
+    # renders in the From line. With signatures disabled the settings endpoint
+    # is never touched and From stays the bare address unless from_name is given.
     sender_email = from_email or user_google_email
     sender_display_name = signature_html = ""
     if include_signature:
@@ -3017,15 +2925,7 @@ async def send_gmail_message(
     if resolved_attachments:
         if quote_target:
             send_body_content = _build_quoted_reply_body(
-                body,
-                body_format,
-                signature_html,
-                {
-                    "sender": quote_target.get("from") or "unknown",
-                    "date": quote_target.get("date", ""),
-                    "text_body": quote_target.get("text_body", ""),
-                    "html_body": quote_target.get("html_body", ""),
-                },
+                body, body_format, signature_html, quote_target
             )
         else:
             send_body_content = _append_signature_to_body(
@@ -3107,7 +3007,7 @@ async def _forward_gmail_message_impl(
     from_name: Optional[str] = None,
     from_email: Optional[str] = None,
     user_google_email: str = "",
-    direction: Literal["auto", "ltr", "rtl"] = "auto",
+    direction: TextDirection = "auto",
     as_draft: bool = False,
     attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
@@ -3375,10 +3275,7 @@ async def draft_gmail_message(
         ),
     ] = False,
     direction: Annotated[
-        Literal["auto", "ltr", "rtl"],
-        Field(
-            description="Base text direction for the composed body. 'auto' (default) detects it from the body via the Unicode bidi first-strong-character rule (a right-to-left script \u2192 right-to-left, otherwise left-to-right); 'ltr'/'rtl' force it. Embedded opposite-direction runs (Latin words, numerals) always render correctly via the browser's bidi algorithm. Note: this orients the HTML body via a dir attribute, matching Gmail web's bare-fragment output. Some clients (e.g. Spark iOS) ignore dir on a wrapperless fragment and render right-to-left text left-aligned; this is a client-side limitation that likewise affects real Gmail-web-composed RTL mail.",
-        ),
+        TextDirection, Field(description=DIRECTION_DESCRIPTION)
     ] = "auto",
 ) -> str:
     """
@@ -3594,15 +3491,7 @@ async def draft_gmail_message(
     if resolved_attachments:
         if quote_target:
             draft_body = _build_quoted_reply_body(
-                draft_body,
-                body_format,
-                signature_html,
-                {
-                    "sender": quote_target.get("from") or "unknown",
-                    "date": quote_target.get("date", ""),
-                    "text_body": quote_target.get("text_body", ""),
-                    "html_body": quote_target.get("html_body", ""),
-                },
+                draft_body, body_format, signature_html, quote_target
             )
         else:
             draft_body = _append_signature_to_body(
