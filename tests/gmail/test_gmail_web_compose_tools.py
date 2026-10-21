@@ -7,9 +7,12 @@ network. Synthetic data only (example.com / example.org, generic names).
 import base64
 import quopri
 import re
+from email import message_from_string
 from unittest.mock import Mock
+
 import pytest
-from gmail.gmail_tools import send_gmail_message
+
+from gmail.gmail_tools import _prepare_gmail_message, send_gmail_message
 
 
 def _unwrap(tool):
@@ -42,7 +45,6 @@ def _html_part(raw: str) -> str:
     which the QP-only ``_decode_bodies`` cannot decode; let the stdlib parser
     handle either encoding.
     """
-    from email import message_from_string
 
     parsed = message_from_string(raw)
     return "".join(
@@ -305,7 +307,6 @@ async def test_send_rejects_crlf_header_injection_in_subject():
 
 
 def _plain_part(raw: str) -> str:
-    from email import message_from_string
 
     parsed = message_from_string(raw)
     return "".join(
@@ -336,7 +337,6 @@ async def test_send_html_body_plain_part_keeps_paragraph_breaks():
 
 
 def test_prepare_web_html_body_plain_part_keeps_paragraph_breaks():
-    from gmail.gmail_tools import _prepare_gmail_message
 
     raw_b64, *_ = _prepare_gmail_message(
         subject="Paragraphs",

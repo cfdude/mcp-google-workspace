@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import secrets
 import ssl
 from collections import Counter
 from datetime import datetime, timezone
+from email.header import Header
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional
@@ -18,6 +20,24 @@ from fastmcp.exceptions import ToolError as ToolExecutionError
 from googleapiclient.errors import HttpError
 
 from core.utils import UserInputError
+from gmail.gmail_web_mime import (
+    assemble_alternative,
+    base_text_direction,
+    build_forwarded_container_html,
+    build_forwarded_plain,
+    build_quote_container_html,
+    build_quote_plain,
+    encode_raw,
+    format_address_list,
+    format_attribution_html,
+    format_attribution_plain,
+    format_display_address,
+    format_gmail_date,
+    gmail_boundary,
+    new_message_html,
+    plain_body_to_html,
+    render_forward_recipients_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -925,6 +945,265 @@ def html_newlines_to_br(html_body: str) -> str:
             rebuilt.append("<br>" * min(piece.count("\n"), 2) + "\n")
         out.append("".join(rebuilt))
     return "".join(out)
+
+
+# A body that already opens with a ``<div ... dir=...>`` container; group
+# ``dir`` spans the attribute value (quoted or bare). Attributes before ``dir``
+# are consumed whole (name plus quoted or bare value), so ``dir=`` text inside
+# another attribute's quoted value is never mistaken for the attribute itself.
+_HTML_ATTR_VALUE = r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+)"
+_LEADING_DIR_DIV_RE = re.compile(
+    r"\s*<div"
+    rf"(?:\s+(?!dir\s*=)[^\s\"'>/=]+(?:\s*=\s*{_HTML_ATTR_VALUE})?)*"
+    rf"\s+dir\s*=\s*(?P<dir>{_HTML_ATTR_VALUE})",
+    re.IGNORECASE,
+)
+
+
+def _force_leading_dir(body: str, direction: str) -> str:
+    """Point a body's own leading ``<div dir=...>`` container at ``direction``."""
+    wrapper = _LEADING_DIR_DIV_RE.match(body)
+    if wrapper is None:
+        return body
+    return f'{body[: wrapper.start("dir")]}"{direction}"{body[wrapper.end("dir") :]}'
+
+
+def _derive_web_bodies(
+    body: str,
+    body_format: Literal["plain", "html"],
+    direction: Literal["auto", "ltr", "rtl"],
+) -> tuple[str, str]:
+    """Derive the (text/plain, text/html) parts of a Gmail-web compose.
+
+    Plain text becomes Gmail's typed ``<div>`` structure inside the direction
+    container; HTML is wrapped in that container unless it already starts with
+    one, and its plain part keeps block breaks. ``"auto"`` detects the base
+    direction from the body text.
+    """
+    if body_format == "html":
+        plain_part = html_to_text_preserving_breaks(body).strip()
+        if _LEADING_DIR_DIV_RE.match(body) is None:
+            resolved_dir = (
+                base_text_direction(plain_part) if direction == "auto" else direction
+            )
+            return plain_part, new_message_html(body, resolved_dir)
+        # Keep the caller's own container; an explicit direction wins over its dir.
+        if direction == "auto":
+            return plain_part, body
+        return plain_part, _force_leading_dir(body, direction)
+    resolved_dir = base_text_direction(body) if direction == "auto" else direction
+    return body, new_message_html(plain_body_to_html(body), resolved_dir)
+
+
+def _parse_message_date(value: str) -> Optional[datetime]:
+    """Parse a Date header, or return None.
+
+    Keeps the sender's own UTC offset: Gmail shows the sender's wall-clock
+    time, not UTC.
+    """
+    try:
+        return parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return _parse_date_header(value, None)[1]
+
+
+def _build_web_reply_bodies(
+    new_plain: str, new_html: str, target: Dict[str, Any]
+) -> tuple[str, str]:
+    """Append a Gmail-web ``gmail_quote`` reply trail to both body parts.
+
+    ``target`` is the parent message from the thread reply context (its From,
+    Date and plain + html bodies). When the parent lacks a usable sender address
+    or date, the bodies are returned unchanged so the reply still sends, just
+    without a quote.
+    """
+    parent_name, parent_email = parseaddr(target.get("from") or "")
+    if not parent_email:
+        return new_plain, new_html
+    parent_name = parent_name.strip() or parent_email
+
+    parent_dt = _parse_message_date(target.get("date") or "")
+    if parent_dt is None:
+        return new_plain, new_html
+
+    parent_text = target.get("text_body") or ""
+    if not parent_text and target.get("html_body"):
+        # Keep the parent's paragraph structure in the quoted plain text.
+        parent_text = html_to_text_preserving_breaks(target["html_body"]).strip()
+    parent_html = target.get("html_body") or ""
+    if not parent_html and parent_text:
+        parent_html = "<br>".join(html.escape(line) for line in parent_text.split("\n"))
+
+    attr_plain = format_attribution_plain(parent_name, parent_email, parent_dt)
+    attr_html = format_attribution_html(parent_name, parent_email, parent_dt)
+    quoted_plain = build_quote_plain(parent_text)
+    container = build_quote_container_html(attr_html, parent_html)
+
+    reply_plain = f"{new_plain}\n\n{attr_plain}\n\n{quoted_plain}"
+    reply_html = f"{new_html}<br>{container}"
+    return reply_plain, reply_html
+
+
+def _build_forward_content(
+    headers: Mapping[str, str],
+    bodies: Mapping[str, str],
+    forward_message: Optional[str],
+    forward_message_format: Literal["plain", "html"],
+    subject_override: Optional[str],
+    direction: Literal["auto", "ltr", "rtl"] = "auto",
+) -> tuple[str, str, str]:
+    """Build the (subject, text/plain, text/html) of a Gmail-web forward.
+
+    Pure formatting kept out of the @server.tool wrapper so it is independently
+    testable. An explicit subject_override wins over the derived
+    'Fwd: <subject>'; ``direction`` sets the base direction of the prepended
+    note ('auto' detects it from the note text).
+    """
+    orig_subject = headers.get("Subject", "(no subject)")
+    orig_from_raw = headers.get("From", "(unknown sender)")
+    orig_date_raw = headers.get("Date", "(unknown date)")
+    orig_to_raw = headers.get("To", "")
+    orig_plain = bodies.get("text", "")
+    orig_html = bodies.get("html", "")
+
+    orig_from_name, orig_from_email = parseaddr(orig_from_raw)
+    if "@" not in orig_from_email:
+        # No usable address: show the raw From as text, never as a dead mailto link.
+        orig_from_name, orig_from_email = orig_from_raw, ""
+    orig_from_name = orig_from_name.strip() or None
+    orig_dt = _parse_message_date(orig_date_raw)
+    orig_date_str = format_gmail_date(orig_dt) if orig_dt else orig_date_raw
+
+    # Derive the subject, avoiding a double prefix for "Fwd:"/"FW:".
+    if subject_override:
+        subject = subject_override
+    elif orig_subject.lower().lstrip().startswith(("fwd:", "fw:")):
+        subject = orig_subject
+    else:
+        subject = f"Fwd: {orig_subject}"
+
+    # Fill whichever body the original lacks from the other (mirrors
+    # _build_web_reply_bodies): an HTML-only original still needs its text in
+    # the forward's text/plain part, keeping block breaks.
+    if not orig_plain and orig_html:
+        orig_plain = html_to_text_preserving_breaks(orig_html).strip()
+    if not orig_html and orig_plain:
+        orig_html = "<br>".join(html.escape(line) for line in orig_plain.split("\n"))
+
+    if forward_message and forward_message_format == "html":
+        note_html = html_newlines_to_br(forward_message)
+        note_plain = html_to_text_preserving_breaks(note_html).strip()
+        if direction != "auto":
+            # As on a regular send, an explicit direction wins over the note's dir.
+            note_html = _force_leading_dir(note_html, direction)
+    else:
+        note_plain = forward_message or ""
+        note_html = plain_body_to_html(forward_message) if forward_message else ""
+
+    # Plain body: optional note + forwarded block (NOT > -quoted).
+    forward_plain = build_forwarded_plain(
+        from_name=orig_from_name,
+        from_email=orig_from_email,
+        date_str=orig_date_str,
+        subject=orig_subject,
+        to_rendered_plain=orig_to_raw,
+        orig_plain=orig_plain,
+    )
+    if note_plain:
+        forward_plain = f"{note_plain}\n\n{forward_plain}"
+
+    # HTML body: note div + forwarded container (no blockquote).
+    container = build_forwarded_container_html(
+        from_name=orig_from_name,
+        from_email=orig_from_email,
+        date_str=orig_date_str,
+        subject=orig_subject,
+        to_rendered=render_forward_recipients_html(orig_to_raw),
+        orig_html=orig_html,
+    )
+    if note_html:
+        # Base direction follows the user's note; the forwarded original keeps
+        # its own dir markup inside the container.
+        note_dir = base_text_direction(note_plain) if direction == "auto" else direction
+        forward_html = new_message_html(f"{note_html}<br><br>{container}", note_dir)
+    else:
+        # No note: nothing user-authored to orient, so "auto" stays ltr
+        # (byte-identical); an explicit direction is still honored.
+        forward_html = new_message_html(
+            f"<br>{container}", "ltr" if direction == "auto" else direction
+        )
+    return subject, forward_plain, forward_html
+
+
+def _prepare_gmail_message_web(
+    subject: str,
+    plain_body: str,
+    html_body: str,
+    to: Optional[str] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
+    from_email: Optional[str] = None,
+    from_name: Optional[str] = None,
+) -> str:
+    """Assemble a Gmail-web faithful ``multipart/alternative`` message.
+
+    ``plain_body`` and ``html_body`` are the fully-assembled text/plain and
+    text/html parts built by the caller. Returns the base64url raw message.
+    To/Cc/Bcc are validated, then any non-ASCII display names are RFC 2047
+    encoded; From is formatted here from ``from_email`` + optional ``from_name``.
+    """
+
+    # Reject CR/LF in any user-controlled header value before assembly: bare
+    # newlines would let a crafted subject/recipient inject extra headers
+    # (RFC5322 header injection).
+    def _safe_header(field: str, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError(f"Invalid {field} header value: line breaks not allowed.")
+        return value
+
+    # Author headers in Gmail's order. Message-ID is intentionally NOT authored
+    # (Gmail assigns it on send/draft).
+    headers: List[tuple[str, str]] = [("MIME-Version", "1.0")]
+    if references:
+        # Fold the References chain with CRLF + TAB per RFC5322 continuation.
+        folded = "\r\n\t".join(_safe_header("References", references).split())
+        headers.append(("References", folded))
+    if in_reply_to:
+        headers.append(("In-Reply-To", _safe_header("In-Reply-To", in_reply_to)))
+    if bcc:
+        headers.append(("Bcc", format_address_list(_safe_header("Bcc", bcc))))
+    # Guard the caller-supplied subject for header injection BEFORE encoding.
+    # A long non-ASCII subject RFC2047-folds into a multi-line continuation; with
+    # linesep="\r\n" that is a valid RFC5322 fold, but _safe_header would reject
+    # its CRLF, so validate the raw input and append the encoded value directly.
+    _safe_header("Subject", subject)
+    subj_value = (
+        subject
+        if subject.isascii()
+        else Header(subject, "utf-8").encode(maxlinelen=998, linesep="\r\n")
+    )
+    headers.append(("Subject", subj_value))
+    if from_email:
+        headers.append(
+            (
+                "From",
+                _safe_header("From", format_display_address(from_name, from_email)),
+            )
+        )
+    if to:
+        headers.append(("To", format_address_list(_safe_header("To", to))))
+    if cc:
+        headers.append(("Cc", format_address_list(_safe_header("Cc", cc))))
+
+    message = assemble_alternative(
+        headers=headers,
+        plain_text=plain_body,
+        html_text=html_body,
+        boundary=gmail_boundary(),
+    )
+    return encode_raw(message)
 
 
 def _signature_html_to_text(signature_html: str) -> str:

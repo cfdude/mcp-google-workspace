@@ -5,11 +5,13 @@ All fixtures use synthetic data only (example.com addresses, no personal data).
 
 import email.mime.multipart
 import email.mime.text
+
 from tools.golden_skeleton import (
+    _Sanitizer,
+    _plain_line_structure,
+    _redact,
     extract_skeleton,
     sanitize_html,
-    _plain_line_structure,
-    _Sanitizer,
 )
 
 
@@ -169,7 +171,6 @@ def test_attr_template_redacts_date():
 
 def test_redact_apostrophe_local_part():
     """Addresses with apostrophes in the local part must be fully redacted."""
-    from tools.golden_skeleton import _redact
 
     result = _redact("Send to o'hara@example.com please")
     assert "o'hara" not in result, f"local part leaked: {result!r}"

@@ -1,10 +1,15 @@
+import base64
 import json
 import pathlib
+import quopri
 import re
+
 from gmail.gmail_web_mime import (
     BLOCKQUOTE_STYLE,
+    assemble_alternative,
     build_forwarded_container_html,
     build_forwarded_plain,
+    choose_cte,
 )
 from tools.golden_skeleton import sanitize_html
 
@@ -332,20 +337,17 @@ def test_forward_plain_scaffold_matches_golden():
 
 
 def test_choose_cte_plain_ascii():
-    from gmail.gmail_web_mime import choose_cte
 
     assert choose_cte("plain ascii text") == "quoted-printable"
 
 
 def test_choose_cte_empty_string():
-    from gmail.gmail_web_mime import choose_cte
 
     assert choose_cte("") == "quoted-printable"
 
 
 def test_choose_cte_mostly_ascii_body():
     """A body that is overwhelmingly ASCII favours quoted-printable (base64 inflates it)."""
-    from gmail.gmail_web_mime import choose_cte
 
     # Long ASCII prefix with a single accented char: QP adds =C3=A9 (6 bytes) but
     # base64 inflates every ASCII byte by ~33 %, so QP wins overall.
@@ -355,7 +357,6 @@ def test_choose_cte_mostly_ascii_body():
 
 def test_choose_cte_hebrew_body():
     """A long Hebrew string should yield base64 (QP would triple each byte)."""
-    from gmail.gmail_web_mime import choose_cte
 
     # 80 Hebrew characters: each is 2 UTF-8 bytes; QP → =XX=XX (6 bytes each)
     hebrew = "שלום" * 20  # 80 chars → 160 UTF-8 bytes
@@ -364,7 +365,6 @@ def test_choose_cte_hebrew_body():
 
 def test_choose_cte_cjk_body():
     """A long CJK string should yield base64."""
-    from gmail.gmail_web_mime import choose_cte
 
     cjk = "你好世界" * 20  # 80 chars → 240 UTF-8 bytes (3 bytes each)
     assert choose_cte(cjk) == "base64"
@@ -372,9 +372,6 @@ def test_choose_cte_cjk_body():
 
 def test_assemble_alternative_ascii_body_uses_qp():
     """ASCII body → both parts use Content-Transfer-Encoding: quoted-printable."""
-    import re
-
-    from gmail.gmail_web_mime import assemble_alternative
 
     headers = [("From", "a@example.com"), ("To", "b@example.com"), ("Subject", "QP")]
     raw = assemble_alternative(
@@ -390,9 +387,6 @@ def test_assemble_alternative_ascii_body_uses_qp():
 
 def test_assemble_alternative_ascii_body_qp_roundtrip():
     """ASCII body QP-encoded: decoding the body block returns the original text."""
-    import quopri
-
-    from gmail.gmail_web_mime import assemble_alternative
 
     plain = "Hello from the test suite.\nSecond line."
     html = "<div>Hello from the test suite.</div><div>Second line.</div>"
@@ -420,9 +414,6 @@ def test_assemble_alternative_ascii_body_qp_roundtrip():
 
 def test_assemble_alternative_hebrew_plain_uses_base64():
     """Heavily-non-ASCII plain body → plain part uses base64; decodes correctly."""
-    import base64 as _b64
-
-    from gmail.gmail_web_mime import assemble_alternative
 
     hebrew_plain = "שלום" * 30  # 120 Hebrew chars
     html = "<div>hello</div>"  # ASCII → may differ
@@ -448,16 +439,12 @@ def test_assemble_alternative_hebrew_plain_uses_base64():
     # Decode body and verify round-trip
     body_offset = plain_block.index(crlf + crlf) + len(crlf + crlf)
     b64_block = plain_block[body_offset:]
-    decoded = _b64.b64decode(b64_block.replace(crlf, "")).decode("utf-8")
+    decoded = base64.b64decode(b64_block.replace(crlf, "")).decode("utf-8")
     assert decoded == hebrew_plain
 
 
 def test_assemble_alternative_parts_can_differ_in_cte():
     """Plain and HTML parts may independently choose different CTEs."""
-    import base64 as _b64
-    import quopri
-
-    from gmail.gmail_web_mime import assemble_alternative
 
     # Plain body: heavily non-ASCII → should be base64
     hebrew_plain = "שלום עולם" * 20
@@ -497,7 +484,7 @@ def test_assemble_alternative_parts_can_differ_in_cte():
 
     # Verify plain round-trip
     plain_body_offset = plain_block.index(crlf + crlf) + len(crlf + crlf)
-    plain_decoded = _b64.b64decode(
+    plain_decoded = base64.b64decode(
         plain_block[plain_body_offset:].replace(crlf, "")
     ).decode("utf-8")
     assert plain_decoded == hebrew_plain

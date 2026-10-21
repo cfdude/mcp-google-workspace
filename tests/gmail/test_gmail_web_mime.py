@@ -8,18 +8,31 @@ import base64
 import quopri
 import re
 from datetime import datetime, timezone
+from email import message_from_string
+from email.header import decode_header, make_header
+
+import pytest
+
+from gmail.gmail_helpers import _build_web_reply_bodies, _derive_web_bodies
+from gmail.gmail_tools import _prepare_gmail_message
 from gmail.gmail_web_mime import (
     BLOCKQUOTE_STYLE,
+    _qp_encode,
     base_text_direction,
+    build_forwarded_container_html,
     build_quote_container_html,
     build_quote_html,
     build_quote_plain,
+    choose_cte,
+    format_address_list,
     format_attribution_html,
     format_attribution_plain,
     format_display_address,
     gmail_boundary,
     new_message_html,
+    parse_address_list,
     plain_body_to_html,
+    render_forward_recipients_html,
 )
 
 
@@ -216,7 +229,6 @@ def _reply_bodies(reply="Thanks!", parent_text="Original line", parent_html=None
 
 class TestPrepareWebMessage:
     def _build(self, plain="Hello there", html=None, **kwargs):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         if html is None:
             plain, html = _new_bodies(plain)
@@ -290,9 +302,6 @@ class TestPrepareWebMessage:
         Exercises ``_prepare_gmail_message``'s own new_message_html call at the
         web_compose plain branch, where base-direction resolution happens.
         """
-        from email import message_from_string
-
-        from gmail.gmail_tools import _prepare_gmail_message
 
         defaults = dict(
             subject="Project sync",
@@ -373,7 +382,6 @@ class TestNoToolFingerprints:
 
     def _new_body_html(self, body: str) -> str:
         """Return the decoded new-body HTML block for a normal (non-reply) send."""
-        from gmail.gmail_tools import _prepare_gmail_message
 
         plain, html = _new_bodies(body)
         raw, *_ = _prepare_gmail_message(
@@ -421,7 +429,6 @@ class TestNoToolFingerprints:
             assert marker not in block
 
     def test_no_vendor_headers(self):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         plain, html = _new_bodies("Hello")
         raw, *_ = _prepare_gmail_message(
@@ -449,7 +456,6 @@ class TestSenderNameNotContactsResolved:
 
     def test_from_name_none_renders_bare_address(self):
         """from_name=None must produce a bare-address From, not a contacts name."""
-        from gmail.gmail_tools import _prepare_gmail_message
 
         plain, html = _new_bodies("Hello")
         raw, *_ = _prepare_gmail_message(
@@ -484,7 +490,6 @@ class TestLongNonAsciiNameNoFolding:
 
     def test_long_cjk_name_passes_safe_header_check(self):
         """Building a message with a long non-ASCII from_name must not raise ValueError."""
-        from gmail.gmail_tools import _prepare_gmail_message
 
         plain, html = _new_bodies("Hello")
         long_name = "山" * 120
@@ -506,7 +511,6 @@ class TestForwardedDateEscaping:
     """date_str in the forwarded-message attr block must be HTML-escaped."""
 
     def test_date_str_with_html_chars_is_escaped(self):
-        from gmail.gmail_web_mime import build_forwarded_container_html
 
         malicious_date = '<script>alert("xss")</script>'
         result = build_forwarded_container_html(
@@ -528,7 +532,6 @@ class TestChooseCteUnderscore:
     """choose_cte must classify underscore-heavy ASCII as quoted-printable."""
 
     def test_underscore_heavy_returns_qp(self):
-        from gmail.gmail_web_mime import choose_cte
 
         result = choose_cte("_" * 200)
         assert result == "quoted-printable", (
@@ -540,13 +543,11 @@ class TestRenderForwardRecipientsHtml:
     """render_forward_recipients_html must produce Gmail-web forwarded-To markup."""
 
     def test_bare_address_no_display_name(self):
-        from gmail.gmail_web_mime import render_forward_recipients_html
 
         result = render_forward_recipients_html("addr@example.com")
         assert result == '<a href="mailto:addr@example.com">addr@example.com</a>'
 
     def test_address_with_display_name(self):
-        from gmail.gmail_web_mime import render_forward_recipients_html
 
         result = render_forward_recipients_html('"Jane Roe" <jane@example.com>')
         assert (
@@ -555,7 +556,6 @@ class TestRenderForwardRecipientsHtml:
         )
 
     def test_multiple_recipients_joined_by_comma_space(self):
-        from gmail.gmail_web_mime import render_forward_recipients_html
 
         result = render_forward_recipients_html("a@example.com, b@example.com")
         assert result == (
@@ -564,7 +564,6 @@ class TestRenderForwardRecipientsHtml:
         )
 
     def test_injection_regression_display_name_escaped(self):
-        from gmail.gmail_web_mime import render_forward_recipients_html
 
         malicious = '"<img src=x onerror=alert(1)>" <a@b.com>'
         result = render_forward_recipients_html(malicious)
@@ -574,15 +573,10 @@ class TestRenderForwardRecipientsHtml:
         assert "&lt;img" in result
 
     def test_empty_string_returns_empty(self):
-        from gmail.gmail_web_mime import render_forward_recipients_html
 
         assert render_forward_recipients_html("") == ""
 
     def test_build_forwarded_container_uses_mailto_link(self):
-        from gmail.gmail_web_mime import (
-            build_forwarded_container_html,
-            render_forward_recipients_html,
-        )
 
         to_html = render_forward_recipients_html('"X" <x@example.com>')
         result = build_forwarded_container_html(
@@ -602,7 +596,6 @@ class TestNonAsciiSubjectEncoding:
     """Non-ASCII Subject headers must be RFC 2047-encoded; ASCII subjects unchanged."""
 
     def test_non_ascii_subject_produces_encoded_word(self):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         raw, *_ = _prepare_gmail_message(
             subject="Hello \u2014 world",
@@ -628,7 +621,6 @@ class TestNonAsciiSubjectEncoding:
         assert "\u2014" not in subject_line
 
     def test_ascii_subject_is_unchanged(self):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         raw, *_ = _prepare_gmail_message(
             subject="Plain subject",
@@ -645,8 +637,6 @@ class TestNonAsciiSubjectEncoding:
         assert subject_line == "Subject: Plain subject"
 
     def test_non_ascii_subject_round_trips(self):
-        from email.header import decode_header
-        from gmail.gmail_tools import _prepare_gmail_message
 
         original = "Hello \u2014 world"
         raw, *_ = _prepare_gmail_message(
@@ -674,14 +664,12 @@ class TestQpCanonicalLineEndings:
     """QP soft breaks must be CRLF even when the part has no newline."""
 
     def test_long_single_line_has_no_bare_lf(self):
-        from gmail.gmail_web_mime import _qp_encode
 
         encoded = _qp_encode("<div>" + "a" * 200 + "</div>")
         assert "=\r\n" in encoded
         assert "\n" not in encoded.replace("\r\n", "")
 
     def test_long_single_line_html_part_in_message_has_no_bare_lf(self):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         raw, *_ = _prepare_gmail_message(
             subject="Long line",
@@ -702,7 +690,6 @@ class TestNonAsciiRecipientEncoding:
         return next(line for line in msg.split("\r\n") if line.startswith(f"{name}:"))
 
     def _build(self, **kwargs):
-        from gmail.gmail_tools import _prepare_gmail_message
 
         raw, *_ = _prepare_gmail_message(
             subject="Hi",
@@ -714,7 +701,6 @@ class TestNonAsciiRecipientEncoding:
         return _decode_raw(raw)
 
     def test_to_cc_bcc_names_are_encoded_and_round_trip(self):
-        from email.header import decode_header, make_header
 
         msg = self._build(
             to="José Núñez <jose@example.com>, ada@example.com",
@@ -737,7 +723,6 @@ class TestNonAsciiRecipientEncoding:
         assert self._header(msg, "To") == f"To: {value}"
 
     def test_line_break_in_non_ascii_recipient_is_rejected(self):
-        import pytest
 
         with pytest.raises(ValueError, match="line breaks"):
             self._build(to="José <jose@example.com>\r\nBcc: evil@example.com")
@@ -747,7 +732,6 @@ class TestForcedDirectionOnExistingWrapper:
     """An explicit direction overrides a caller's leading <div dir=...>."""
 
     def _html(self, body, direction):
-        from gmail.gmail_tools import _derive_web_bodies
 
         return _derive_web_bodies(body, "html", direction)[1]
 
@@ -790,7 +774,6 @@ class TestReplyQuoteParentFidelity:
     """The reply trail keeps the parent's own clock time and paragraph breaks."""
 
     def _bodies(self, **target):
-        from gmail.gmail_tools import _build_web_reply_bodies
 
         base = {"from": "Ada Lovelace <ada@example.com>"}
         base.update(target)
@@ -817,9 +800,6 @@ class TestFormatAddressListParsing:
     """format_address_list must never emit empty entries or flatten groups."""
 
     def _decoded(self, value: str) -> str:
-        from email.header import decode_header, make_header
-
-        from gmail.gmail_web_mime import format_address_list
 
         out = format_address_list(value)
         assert out.isascii(), out
@@ -841,9 +821,6 @@ class TestFormatAddressListParsing:
         )
 
     def test_non_ascii_group_name_is_encoded(self):
-        from email.header import decode_header, make_header
-
-        from gmail.gmail_web_mime import format_address_list
 
         out = format_address_list("Équipe: a@example.com;, José <j@example.com>")
         assert out.isascii(), out
@@ -852,17 +829,11 @@ class TestFormatAddressListParsing:
         assert str(make_header(decode_header(rest))) == "José <j@example.com>"
 
     def test_malformed_entry_is_rejected_not_dropped(self):
-        import pytest
-
-        from gmail.gmail_web_mime import format_address_list
 
         with pytest.raises(ValueError, match="Invalid address list"):
             format_address_list("José <jose@example.com>, broken <, ada@example.com")
 
     def test_name_without_address_is_rejected(self):
-        import pytest
-
-        from gmail.gmail_web_mime import format_address_list
 
         with pytest.raises(ValueError, match="Invalid address list"):
             format_address_list("José")
@@ -873,9 +844,6 @@ class TestFormatAddressListParsing:
         )
 
     def test_truncated_angle_address_raises_value_error(self):
-        import pytest
-
-        from gmail.gmail_web_mime import format_address_list, parse_address_list
 
         # The stdlib parser raises IndexError on these; the contract is ValueError.
         for value in ("José <", "é: <"):
@@ -886,7 +854,6 @@ class TestFormatAddressListParsing:
                 parse_address_list(value)
 
     def test_folded_names_use_crlf_not_bare_lf(self):
-        from gmail.gmail_web_mime import format_address_list
 
         # Long enough that the RFC 2047 encoding folds past the 998-char limit.
         long_name = "é" * 400
@@ -899,9 +866,6 @@ class TestFormatAddressListParsing:
             assert "\n" not in out.replace("\r\n", ""), out
 
     def test_malformed_ascii_entry_is_rejected(self):
-        import pytest
-
-        from gmail.gmail_web_mime import format_address_list
 
         for value in (
             "alice@example.com, broken <, bob@example.com",
@@ -912,7 +876,6 @@ class TestFormatAddressListParsing:
                 format_address_list(value)
 
     def test_valid_ascii_list_is_returned_byte_identical(self):
-        from gmail.gmail_web_mime import format_address_list
 
         for value in (
             "Ada Lovelace <ada@example.com>,  alan@example.com",
