@@ -52,16 +52,9 @@ ecosystem.config.cjs
 
 # ---- Agent instructions (not for distribution) -------------------------
 .github/instructions/
-.conductor/detours.log
-.conductor/write-conflicts.log
-.conductor/write-conflicts.log.prev
-.conductor/honcho-memories.log
-.conductor/brief.txt
-.conductor/write-conflicts.latch
-.conductor/commit-watch.json
-.conductor/commit-observe.json*
-.conductor/session-claim.json*
-.conductor/state.json.lock*
-.conductor/state.json.tmp*
-.conductor/activity/
-.conductor/spend/
+
+# ---- Fork-local agent tooling (never upstream) --------------------------
+.conductor/
+PROJECT.md
+openspec/
+docs/superpowers/
