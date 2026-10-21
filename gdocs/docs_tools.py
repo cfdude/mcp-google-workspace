@@ -540,6 +540,9 @@ async def create_doc(
     """
     Creates a new Google Doc and optionally inserts initial content.
 
+    `content` is inserted as plain text (Markdown is not rendered); use
+    import_to_google_doc to create a doc from Markdown.
+
     After creation, the document body starts at index 1. A new empty doc
     has total length 2 (one section break at index 0, one newline at index 1).
 

@@ -11,11 +11,13 @@ from collections import Counter
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional
 
 import httplib2
 from fastmcp.exceptions import ToolError as ToolExecutionError
 from googleapiclient.errors import HttpError
+
+from core.utils import UserInputError
 
 logger = logging.getLogger(__name__)
 
@@ -832,6 +834,30 @@ _HTML_TAG_RE = re.compile(
 # would corrupt CSS/JS or show up literally.
 _HTML_RAW_TEXT_RE = re.compile(r"<\s*(?:pre|style|script|textarea)\b", re.IGNORECASE)
 _NEWLINE_RUN_RE = re.compile(r"((?:\r?\n)+)")
+_ESCAPED_LT = r"&(?:lt|#0*60|#x0*3c);"
+_ESCAPED_GT = r"&(?:gt|#0*62|#x0*3e);"
+# Non-space attribute start avoids quadratic backtracking against \s+.
+_ESCAPED_HTML_OPENING_TAG_RE = re.compile(
+    rf"^\s*{_ESCAPED_LT}\s*[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>\s][^<>]*|\s*(?:/\s*)?)(?:>|{_ESCAPED_GT})",
+    re.IGNORECASE,
+)
+_RAW_HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][A-Za-z0-9-]*(?:\s|/|>)")
+
+
+def _reject_entity_escaped_html_body(
+    body: Optional[str], body_format: Literal["plain", "html"]
+) -> None:
+    """Reject an html body that opens with an escaped tag and contains no real tag."""
+    if not body or body_format != "html":
+        return
+    if not _ESCAPED_HTML_OPENING_TAG_RE.match(body) or _RAW_HTML_TAG_RE.search(body):
+        return
+    raise UserInputError(
+        "body_format='html' but the body's markup is HTML-entity-escaped "
+        "(e.g. '&lt;div&gt;'), so the recipient would see the tags as literal "
+        "text. Resend with real markup such as '<div>'. To show escaped text "
+        "on purpose, wrap the body in a real tag such as '<p>...</p>'."
+    )
 
 
 def html_newlines_to_br(html_body: str) -> str:
