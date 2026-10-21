@@ -7,7 +7,7 @@ import socket
 import sys
 from functools import partial
 from importlib import metadata, import_module
-from typing import NoReturn
+from typing import NoReturn, Optional
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from core.startup_ui import StartupDisplay, collapse_home, wordmark_lines
@@ -313,6 +313,34 @@ def fatal(ui: StartupDisplay, text: str, *details: str) -> NoReturn:
         ui.detail(detail)
     logger.error("Startup aborted: %s", ". ".join([text, *details]))
     sys.exit(1)
+
+
+def _http_port_conflict(host: str, port: int) -> Optional[str]:
+    """Return why the HTTP server could not bind host:port, or None if it can.
+
+    The probe binds the way uvicorn does, with SO_REUSEADDR on POSIX. A plain
+    bind also fails on connections the previous server left in TIME_WAIT, so a
+    restart was refused for ~30s on macOS even though uvicorn would have bound
+    fine. SO_REUSEADDR lets a wildcard bind succeed beside a live loopback
+    listener on macOS, so a connect to the port catches that listener first.
+    """
+    connect_host = "127.0.0.1" if host in ("", "0.0.0.0") else host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex((connect_host, port)) == 0:
+                return f"a server is already listening on {connect_host}:{port}"
+    except OSError:
+        pass
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if os.name != "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+    except OSError as e:
+        return str(e)
+    return None
 
 
 def configure_safe_logging():
@@ -1013,14 +1041,12 @@ def main():
 
         if args.transport == "streamable-http":
             # Check port availability before starting HTTP server
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind((host, port))
-            except OSError as e:
+            conflict = _http_port_conflict(host, port)
+            if conflict is not None:
                 fatal(
                     ui,
                     f"Port {port} is already in use. Cannot start HTTP server.",
-                    str(e),
+                    conflict,
                 )
 
             server.run(
@@ -1043,10 +1069,7 @@ def main():
                 async def _run_dual() -> None:
                     """Run stdio and HTTP transports concurrently."""
                     http_available = True
-                    try:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            s.bind((http_host, http_port))
-                    except OSError:
+                    if _http_port_conflict(http_host, http_port) is not None:
                         logger.warning(
                             "Port %d in use, workspace-cli HTTP endpoint unavailable",
                             http_port,
