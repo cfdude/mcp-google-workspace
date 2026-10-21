@@ -7,7 +7,7 @@ import socket
 import sys
 from functools import partial
 from importlib import metadata, import_module
-from typing import NoReturn, Optional
+from typing import NoReturn
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from core.startup_ui import StartupDisplay, collapse_home, wordmark_lines
@@ -317,32 +317,17 @@ def fatal(ui: StartupDisplay, text: str, *details: str) -> NoReturn:
 
 def _local_ipv4_addresses() -> list[str]:
     """Best-effort list of this machine's IPv4 addresses, loopback first."""
-    addresses = ["127.0.0.1"]
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-    except OSError:
+    except (OSError, UnicodeError):
         infos = []
-    for info in infos:
-        address = info[4][0]
-        if address not in addresses:
-            addresses.append(address)
-    return addresses
+    return list(dict.fromkeys(["127.0.0.1", *(info[4][0] for info in infos)]))
 
 
-def _http_port_conflict(host: str, port: int) -> Optional[str]:
-    """Return why the HTTP server could not bind host:port, or None if it can.
-
-    The probe binds the way uvicorn does, with SO_REUSEADDR on POSIX. A plain
-    bind also fails on connections the previous server left in TIME_WAIT, so a
-    restart was refused for ~30s on macOS even though uvicorn would have bound
-    fine. SO_REUSEADDR lets a wildcard bind succeed beside a live listener on
-    one specific local address on macOS, so connects to the port catch such a
-    listener first: on every local address for a wildcard host, else on host.
-    """
-    if host in ("", "0.0.0.0"):
-        connect_hosts = _local_ipv4_addresses()
-    else:
-        connect_hosts = [host]
+def _http_port_conflict(host: str, port: int) -> str | None:
+    """Return why uvicorn could not serve host:port, or None if it can."""
+    # macOS SO_REUSEADDR wildcard binds coexist with specific-address listeners.
+    connect_hosts = _local_ipv4_addresses() if host in ("", "0.0.0.0") else [host]
     for connect_host in connect_hosts:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -354,7 +339,7 @@ def _http_port_conflict(host: str, port: int) -> Optional[str]:
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if os.name != "nt":
+            if os.name != "nt":  # matches asyncio's reuse_address default
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
     except OSError as e:
