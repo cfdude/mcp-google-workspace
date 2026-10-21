@@ -161,6 +161,33 @@ def _apply_visibility_if_valid(
         )
 
 
+_EVENT_COLOR_IDS = {
+    "lavender": "1",
+    "sage": "2",
+    "grape": "3",
+    "flamingo": "4",
+    "banana": "5",
+    "tangerine": "6",
+    "peacock": "7",
+    "graphite": "8",
+    "blueberry": "9",
+    "basil": "10",
+    "tomato": "11",
+}
+
+
+def _resolve_color_id(color: Optional[str]) -> Optional[str]:
+    """Resolve an event color name (e.g. "tomato") or ID ("1"-"11") to its colorId."""
+    if color is None:
+        return None
+    normalized = color.strip().lower()
+    color_id = _EVENT_COLOR_IDS.get(normalized, normalized)
+    if color_id not in _EVENT_COLOR_IDS.values():
+        options = ", ".join(f"{name} ({cid})" for name, cid in _EVENT_COLOR_IDS.items())
+        raise UserInputError(f"Invalid color_id '{color}'. Must be one of: {options}")
+    return color_id
+
+
 _VALID_AUTO_DECLINE_MODES = {
     "declineAllConflictingInvitations",
     "declineOnlyNewConflictingInvitations",
@@ -841,6 +868,7 @@ async def _create_event_impl(
     use_default_reminders: bool = True,
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
+    color_id: Optional[str] = None,
     recurrence: Optional[List[str]] = None,
     guests_can_modify: Optional[bool] = None,
     guests_can_invite_others: Optional[bool] = None,
@@ -880,6 +908,8 @@ async def _create_event_impl(
     normalized_attendees = _normalize_attendees(attendees)
     if normalized_attendees is not None:
         event_body["attendees"] = normalized_attendees
+    if color_id is not None:
+        event_body["colorId"] = color_id
 
     # Handle reminders
     if reminders is not None or not use_default_reminders:
@@ -1495,7 +1525,9 @@ async def manage_event(
         use_default_reminders (Optional[bool]): Whether to use default reminders.
         transparency (Optional[str]): "opaque" (busy) or "transparent" (free).
         visibility (Optional[str]): "default", "public", "private", or "confidential".
-        color_id (Optional[str]): Event color ID (1-11, update only).
+        color_id (Optional[str]): Event color, by name or ID: lavender (1), sage (2),
+            grape (3), flamingo (4), banana (5), tangerine (6), peacock (7),
+            graphite (8), blueberry (9), basil (10), tomato (11).
         recurrence (Optional[List[str]]): RFC5545 recurrence rules for a recurring event, e.g. ["RRULE:FREQ=WEEKLY;COUNT=10"].
         guests_can_modify (Optional[bool]): Whether attendees can modify.
         guests_can_invite_others (Optional[bool]): Whether attendees can invite others.
@@ -1528,6 +1560,7 @@ async def manage_event(
             conference_id,
             add_google_meet,
         )
+        color_id = _resolve_color_id(color_id)
 
     if action_lower == "create":
         if not summary or not start_time or not end_time:
@@ -1556,6 +1589,7 @@ async def manage_event(
             else True,
             transparency=transparency,
             visibility=visibility,
+            color_id=color_id,
             guests_can_modify=guests_can_modify,
             guests_can_invite_others=guests_can_invite_others,
             guests_can_see_other_guests=guests_can_see_other_guests,
