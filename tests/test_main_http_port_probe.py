@@ -42,6 +42,22 @@ def test_port_with_live_listener_is_not_free_when_probing_all_interfaces():
         srv.close()
 
 
+def test_wildcard_probe_sees_a_listener_on_a_non_loopback_address():
+    # On macOS, SO_REUSEADDR lets a wildcard bind succeed beside a listener on
+    # one specific local address, so only a connect to that address finds it.
+    lan_addresses = [a for a in main._local_ipv4_addresses() if a != "127.0.0.1"]
+    if not lan_addresses:
+        pytest.skip("no non-loopback IPv4 address on this machine")
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind((lan_addresses[0], 0))
+    srv.listen()
+    try:
+        port = srv.getsockname()[1]
+        assert main._http_port_conflict("0.0.0.0", port) is not None
+    finally:
+        srv.close()
+
+
 def test_port_left_in_time_wait_by_a_stopped_server_is_free():
     # A server that closes its accepted connections first (what a restarting
     # HTTP server does) leaves them in TIME_WAIT on its own port. uvicorn binds

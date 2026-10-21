@@ -315,23 +315,42 @@ def fatal(ui: StartupDisplay, text: str, *details: str) -> NoReturn:
     sys.exit(1)
 
 
+def _local_ipv4_addresses() -> list[str]:
+    """Best-effort list of this machine's IPv4 addresses, loopback first."""
+    addresses = ["127.0.0.1"]
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        infos = []
+    for info in infos:
+        address = info[4][0]
+        if address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
 def _http_port_conflict(host: str, port: int) -> Optional[str]:
     """Return why the HTTP server could not bind host:port, or None if it can.
 
     The probe binds the way uvicorn does, with SO_REUSEADDR on POSIX. A plain
     bind also fails on connections the previous server left in TIME_WAIT, so a
     restart was refused for ~30s on macOS even though uvicorn would have bound
-    fine. SO_REUSEADDR lets a wildcard bind succeed beside a live loopback
-    listener on macOS, so a connect to the port catches that listener first.
+    fine. SO_REUSEADDR lets a wildcard bind succeed beside a live listener on
+    one specific local address on macOS, so connects to the port catch such a
+    listener first: on every local address for a wildcard host, else on host.
     """
-    connect_host = "127.0.0.1" if host in ("", "0.0.0.0") else host
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            if s.connect_ex((connect_host, port)) == 0:
-                return f"a server is already listening on {connect_host}:{port}"
-    except OSError:
-        pass
+    if host in ("", "0.0.0.0"):
+        connect_hosts = _local_ipv4_addresses()
+    else:
+        connect_hosts = [host]
+    for connect_host in connect_hosts:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex((connect_host, port)) == 0:
+                    return f"a server is already listening on {connect_host}:{port}"
+        except OSError:
+            pass
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
