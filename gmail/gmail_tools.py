@@ -1487,8 +1487,6 @@ def _prepare_gmail_message(
                     cid=f"<{cid_value}>",
                     filename=safe_filename,
                     disposition="inline",
-                    # Gmail web drops an inline part without X-Attachment-Id
-                    # when the draft is sent from its composer.
                     headers=[f"X-Attachment-Id: {cid_value}"],
                 )
                 logger.info(
