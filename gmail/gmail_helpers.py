@@ -1011,7 +1011,7 @@ def _fill_missing_body(plain: str, html_body: str) -> tuple[str, str]:
     if not plain and html_body:
         plain = html_to_text_preserving_breaks(html_body).strip()
     if not html_body and plain:
-        html_body = "<br>".join(html.escape(line) for line in plain.split("\n"))
+        html_body = plain_body_to_html(plain)
     return plain, html_body
 
 
@@ -1141,7 +1141,9 @@ def _prepare_gmail_message_web(
     subject = _reply_subject(_checked_header("Subject", subject), in_reply_to)
     if not subject.isascii():
         # Encode after the check: a long encoded subject folds with a legal CRLF.
-        subject = Header(subject, "utf-8").encode(maxlinelen=998, linesep="\r\n")
+        subject = Header(subject, "utf-8", header_name="Subject").encode(
+            maxlinelen=76, linesep="\r\n"
+        )
 
     headers: List[tuple[str, str]] = [("MIME-Version", "1.0")]
     if references:

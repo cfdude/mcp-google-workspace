@@ -1314,6 +1314,7 @@ def _prepare_gmail_message(
     from_email: Optional[str] = None,
     from_name: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
+    plain_body: Optional[str] = None,
 ) -> tuple[str, Optional[str], int, List[str]]:
     """
     Prepare a Gmail message with threading and attachment support.
@@ -1331,6 +1332,7 @@ def _prepare_gmail_message(
         from_email: Optional sender email address
         from_name: Optional sender display name (e.g., "Peter Hartree")
         attachments: Optional list of attachments. Each can have 'path' (file path) OR 'content' (base64) + 'filename'
+        plain_body: Explicit text alternative for HTML, preserving a forwarded original.
 
     Returns:
         Tuple of (raw_message, thread_id, attached_count, attachment_errors)
@@ -1379,7 +1381,8 @@ def _prepare_gmail_message(
         # a non-HTML client actually displays, so block boundaries have to
         # survive -- _html_to_text() flattens them and would run paragraphs
         # together ("First paragraph.Second paragraph.").
-        plain_body = html_to_text_preserving_breaks(body).strip()
+        if plain_body is None:
+            plain_body = html_to_text_preserving_breaks(body).strip()
         message.set_content(plain_body)
         message.add_alternative(body, subtype="html")
     else:
@@ -3117,6 +3120,7 @@ async def _forward_gmail_message_impl(
         raw_message, _, attached_count, attachment_errors = _prepare_gmail_message(
             subject=forward_subject,
             body=forward_html,
+            plain_body=forward_plain,
             to=to,
             cc=cc,
             bcc=bcc,

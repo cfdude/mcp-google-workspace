@@ -11,12 +11,14 @@ from __future__ import annotations
 import base64
 import html as _html
 import quopri
+import re
 import secrets
 import unicodedata
 from datetime import datetime
 from email.errors import HeaderParseError, InvalidHeaderDefect
 from email.header import Header
 from email.headerregistry import HeaderRegistry
+from email.policy import SMTP
 from email.utils import formataddr, getaddresses
 from typing import List, Literal, Optional, Tuple
 
@@ -51,11 +53,10 @@ def format_display_address(name: Optional[str], email: str) -> str:
     """Format ``Display Name <email>`` for a header.
 
     - No name -> bare address (so unresolved lookups still send).
-    - Non-ASCII names are RFC2047 encoded-word wrapped.
+    - Non-ASCII or long names are RFC2047 encoded-word wrapped.
     - Names with commas/specials are RFC5322 quoted.
 
-    ``email.utils.formataddr`` handles RFC5322 quoting; for non-ASCII it falls
-    back to RFC2047 via ``email.headerregistry.Address``.
+    ``formataddr`` handles quoting; ``Header`` supplies encoded words.
     """
     # Strip CR/LF/NUL from the address too: formataddr does not sanitize it, so
     # an unvalidated CRLF-bearing address would be RFC5322 header injection.
@@ -63,11 +64,11 @@ def format_display_address(name: Optional[str], email: str) -> str:
     if not name or not name.strip():
         return safe_email
     safe_name = _strip_header_controls(name)
-    if safe_name.isascii():
+    if safe_name.isascii() and len(safe_name) <= 75:
         # ASCII name: formataddr applies RFC5322 quoting when needed.
         return formataddr((safe_name, safe_email))
-    # Non-ASCII name: RFC2047 encoded-word for the display phrase.
-    encoded_name = Header(safe_name, "utf-8").encode(maxlinelen=998, linesep="\r\n")
+    # Encoded words also allow long, unbroken display names to fold safely.
+    encoded_name = Header(safe_name, "utf-8").encode(maxlinelen=75, linesep="\r\n")
     return f"{encoded_name} <{safe_email}>"
 
 
@@ -75,11 +76,11 @@ def format_address_list(value: str) -> str:
     """RFC 2047 encode non-ASCII display names in a To/Cc/Bcc address list.
 
     The list is always validated (a malformed entry raises ``ValueError``). A
-    valid all-ASCII value is then returned unchanged (byte-identical to the
-    input); otherwise each address is reformatted with ``format_display_address``.
+    Valid ASCII values within the line limit are returned unchanged; otherwise
+    each address is reformatted with ``format_display_address``.
     """
     groups = parse_address_list(value)
-    if value.isascii():
+    if value.isascii() and len(value) <= 998:
         return value
     out: List[str] = []
     for group_name, members in groups:
@@ -122,8 +123,8 @@ def parse_address_list(value: str) -> List[AddressGroup]:
 def _format_group_name(name: str) -> str:
     """Render an RFC 5322 group display name (quoted or RFC 2047 encoded)."""
     safe = _strip_header_controls(name)
-    if not safe.isascii():
-        return Header(safe, "utf-8").encode(maxlinelen=998, linesep="\r\n")
+    if not safe.isascii() or len(safe) > 75:
+        return Header(safe, "utf-8").encode(maxlinelen=75, linesep="\r\n")
     if any(c in _PHRASE_SPECIALS for c in safe):
         return '"' + safe.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return safe
@@ -143,13 +144,19 @@ def plain_body_to_html(text: str) -> str:
     Each line becomes ``<div>line</div>``; blank lines become ``<div><br></div>``.
     Returned value is the inner HTML (caller wraps it in the ltr container).
     """
-    lines = text.split("\n")
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs().split("\n")
     parts = []
     for line in lines:
         if line == "":
             parts.append("<div><br></div>")
         else:
-            parts.append(f"<div>{_escape_body(line)}</div>")
+            # HTML collapses ASCII spaces; preserve indentation and spacing.
+            escaped = re.sub(
+                r"^ +| +$| {2,}",
+                lambda match: "&nbsp;" * len(match.group()),
+                _escape_body(line),
+            )
+            parts.append(f"<div>{escaped}</div>")
     return "".join(parts)
 
 
@@ -394,7 +401,22 @@ def assemble_alternative(
     the message with CRLF separators, ready for :func:`encode_raw`.
     """
     crlf = "\r\n"
-    lines: List[str] = [f"{name}: {value}" for name, value in headers]
+    policy = SMTP.clone(max_line_length=76)
+    lines: List[str] = []
+    for name, value in headers:
+        if name == "Subject":
+            lines.append(policy.fold(name, value).removesuffix(crlf))
+        else:
+            # Refolding address headers through HeaderRegistry can insert
+            # literal spaces between adjacent encoded words on Python 3.12.
+            folded = Header(value, header_name=name).encode(maxlinelen=76, linesep=crlf)
+            lines.append(f"{name}: {folded}")
+    if any(
+        len(line.encode("utf-8")) > 998
+        for header in lines
+        for line in header.split(crlf)
+    ):
+        raise ValueError("Header contains a token too long to fit an RFC 5322 line.")
     lines.append(f'Content-Type: multipart/alternative; boundary="{boundary}"')
     head = crlf.join(lines)
     return crlf.join([head, "", _alternative_parts(plain_text, html_text, boundary)])

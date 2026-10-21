@@ -95,9 +95,16 @@ class TestDisplayAddress:
         assert "=?utf-8?" in result.lower()
         assert result.endswith("<ada@example.com>")
 
-    def test_long_non_ascii_name_is_not_folded(self):
+    def test_long_non_ascii_name_uses_legal_encoded_words(self):
         result = format_display_address("山" * 120, "user@example.com")
-        assert "\r" not in result and "\n" not in result
+        assert all(
+            len(word) <= 75
+            for word in re.findall(r"=\?[^?]+\?[bBqQ]\?[^?]*\?=", result)
+        )
+        assert (
+            str(make_header(decode_header(result)))
+            == "山" * 120 + " <user@example.com>"
+        )
         assert result.endswith("<user@example.com>")
 
     @pytest.mark.parametrize("name", [None, "Ada", "Adá"])
@@ -465,7 +472,7 @@ class TestFormatAddressListParsing:
                 parse_address_list(value)
 
     def test_folded_names_use_crlf_not_bare_lf(self):
-        # Long enough that the RFC 2047 encoding folds past the 998-char limit.
+        # Long names need multiple RFC 2047 encoded words.
         long_name = "é" * 400
         for value in (f"{long_name} <j@example.com>", f"{long_name}: a@example.com;"):
             out = format_address_list(value)
