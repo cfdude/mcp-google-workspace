@@ -75,6 +75,11 @@ tests/
 tests/**
 docs/
 docs/**
+openspec/
+openspec/**
+.conductor/
+.conductor/**
+PROJECT.md
 dist/
 dist/**
 workspace_mcp.egg-info/
