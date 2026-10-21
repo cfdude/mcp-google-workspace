@@ -1104,10 +1104,23 @@ def _build_forward_content(
     return subject, forward_plain, forward_html
 
 
+_REPLY_PREFIX_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)*re\s*:", re.IGNORECASE)
+
+
 def _reply_subject(subject: str, in_reply_to: Optional[str]) -> str:
-    """Prefix ``Re:`` onto a reply's subject unless it already carries one."""
-    if in_reply_to and not subject.lower().startswith("re:"):
+    """Prefix ``Re:`` onto a reply's subject unless one follows any ``[tag]`` prefixes."""
+    if in_reply_to and not _REPLY_PREFIX_RE.match(subject):
         return f"Re: {subject}"
+    return subject
+
+
+def _inherit_reply_subject(thread_id: str, target: Optional[Mapping[str, Any]]) -> str:
+    """Return the replied-to message's subject, raising when it has none."""
+    subject = (target or {}).get("subject") or ""
+    if not subject.strip():
+        raise UserInputError(
+            f"Could not inherit a subject from thread '{thread_id}'. Pass 'subject' explicitly."
+        )
     return subject
 
 
