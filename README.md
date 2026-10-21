@@ -11,8 +11,6 @@
 [![MCP Toplist](https://mcptoplist.com/badge/glama%2Ftaylorwilsdon%2Fgoogle_workspace_mcp.svg)](https://mcptoplist.com/server/glama%2Ftaylorwilsdon%2Fgoogle_workspace_mcp)
 [![Website](https://img.shields.io/badge/Website-workspacemcp.com-green.svg)](https://workspacemcp.com/?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=badge-website)
 
-<a href="https://workspacemcp.com/release-notes/v2?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=banner-release-v2"><img width="500" height="108.3" alt="readme-banner" src="https://github.com/user-attachments/assets/703faa65-875b-45fa-9600-b82c5d7208ba" /></a>
-
 *Full natural language control over Google Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks, Contacts, and Chat through all MCP clients, AI assistants and developer tools.*
 *Includes a full featured CLI & Code Mode for use with tools like Claude Code and Codex!*
 
@@ -22,6 +20,7 @@ By leveraging native OAuth 2.1, stateless deployment capability and external aut
 
 Supports all free Google accounts & Google Workspace plans with expanded app options like Chat & Spaces. <br/>Interested in a managed cloud instance? [That can be arranged](https://workspacemcp.com/workspace-mcp-cloud?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=hero-cloud) (starting at $5/mo).
 
+<a href="https://workspacemcp.com/release-notes/v2?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=banner-release-v2"><img width="400" height="86.6" alt="readme-banner" src="https://github.com/user-attachments/assets/703faa65-875b-45fa-9600-b82c5d7208ba" /></a>
 
 </div>
 
