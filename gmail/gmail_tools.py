@@ -1487,6 +1487,7 @@ def _prepare_gmail_message(
                     cid=f"<{cid_value}>",
                     filename=safe_filename,
                     disposition="inline",
+                    headers=[f"X-Attachment-Id: {cid_value}"],
                 )
                 logger.info(
                     f"Attached inline: content_id_len={len(cid_value)}, "
