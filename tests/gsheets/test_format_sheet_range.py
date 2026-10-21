@@ -941,6 +941,7 @@ async def test_format_clear_dropdown_sends_rule_less_request():
     "kwargs, message",
     [
         ({"dropdown_values": ["a"], "clear_dropdown": True}, "not both"),
+        ({"dropdown_values": [], "clear_dropdown": True}, "not both"),
         ({"dropdown_values": [" ", ""]}, "at least one value"),
         ({"dropdown_strict": False, "bold": True}, "needs dropdown_values"),
         ({"dropdown_values": [], "bold": True}, "at least one value"),

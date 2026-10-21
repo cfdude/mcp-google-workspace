@@ -403,7 +403,7 @@ def _build_dropdown_request(
         The request dict (without range) and a short human-readable summary.
     """
     if clear_dropdown:
-        if dropdown_values:
+        if dropdown_values is not None:
             raise UserInputError(
                 "Pass either dropdown_values or clear_dropdown, not both."
             )

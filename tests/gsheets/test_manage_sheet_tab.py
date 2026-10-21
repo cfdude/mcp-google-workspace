@@ -265,6 +265,7 @@ async def test_style_invalid_input(kwargs, message):
             sheet_name="January",
             **kwargs,
         )
+    service.spreadsheets.return_value.get.assert_not_called()
     service.spreadsheets.return_value.batchUpdate.assert_not_called()
 
 
