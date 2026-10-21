@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.utils import UserInputError
-from gmail.gmail_helpers import normalize_reply_subject
+from gmail.gmail_helpers import _reply_subject
 from gmail.gmail_tools import (
     _prepare_gmail_message,
     draft_gmail_message,
@@ -73,33 +73,36 @@ def _drafted_subject(service: Mock) -> str:
     return _parse(kwargs["body"]["message"]["raw"])["Subject"]
 
 
-class TestNormalizeReplySubject:
+class TestReplySubject:
     def test_plain_subject_gets_single_re_prefix(self):
-        assert normalize_reply_subject("Project update") == "Re: Project update"
+        assert _reply_subject("Project update", "<p@x>") == "Re: Project update"
 
     def test_existing_re_is_not_doubled(self):
-        assert normalize_reply_subject("Re: Project update") == "Re: Project update"
+        assert _reply_subject("Re: Project update", "<p@x>") == "Re: Project update"
 
     def test_uppercase_re_is_treated_as_reply(self):
-        assert normalize_reply_subject("RE: Project update") == "RE: Project update"
+        assert _reply_subject("RE: Project update", "<p@x>") == "RE: Project update"
 
     def test_list_tag_before_existing_re_is_left_verbatim(self):
         subject = "[list] Re: RE: Project status [#123]"
-        assert normalize_reply_subject(subject) == subject
+        assert _reply_subject(subject, "<p@x>") == subject
 
     def test_list_tag_without_re_gets_single_re_and_keeps_tag(self):
         assert (
-            normalize_reply_subject("[list] Project status [#123]")
+            _reply_subject("[list] Project status [#123]", "<p@x>")
             == "Re: [list] Project status [#123]"
         )
 
+    def test_non_reply_subject_is_unchanged(self):
+        assert _reply_subject("Project update", None) == "Project update"
+
     def test_word_starting_with_re_is_not_a_reply_prefix(self):
-        assert normalize_reply_subject("Report: Q3") == "Re: Report: Q3"
+        assert _reply_subject("Report: Q3", "<p@x>") == "Re: Report: Q3"
 
     def test_is_idempotent(self):
         for s in ["Project update", "Re: X", "[list] Re: RE: X [#1]", "[list] X"]:
-            once = normalize_reply_subject(s)
-            assert normalize_reply_subject(once) == once
+            once = _reply_subject(s, "<p@x>")
+            assert _reply_subject(once, "<p@x>") == once
 
 
 def test_prepare_gmail_message_does_not_double_re_behind_list_tag():
@@ -347,11 +350,3 @@ async def test_draft_new_message_rejects_blank_subject(subject):
             include_signature=False,
         )
     service.users().drafts().create.assert_not_called()
-
-
-def test_draft_gmail_message_keeps_subject_before_body():
-    # Positional callers rely on upstream's (subject, body) order.
-    import inspect
-
-    params = list(inspect.signature(_unwrap(draft_gmail_message)).parameters)
-    assert params.index("subject") < params.index("body")

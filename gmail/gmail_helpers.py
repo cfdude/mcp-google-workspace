@@ -425,24 +425,6 @@ def _parse_message_id_chain(header_value: Optional[str]) -> list[str]:
     return message_ids or header_value.split()
 
 
-# A Re:/RE: reply marker counts as present even behind leading list or ticket
-# tags such as "[list]", so an inherited subject never gains a second Re:.
-_REPLY_PREFIX_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)*re\s*:", re.IGNORECASE)
-
-
-def normalize_reply_subject(subject: str) -> str:
-    """Return *subject* with exactly one leading ``Re:`` reply prefix.
-
-    Prepends ``"Re: "`` only when *subject* is not already a reply. An existing
-    ``Re:``/``RE:`` counts even when preceded by bracketed list/ticket tags
-    (``[list] Re: ...``). Existing prefixes and tags are kept verbatim.
-    Idempotent.
-    """
-    if _REPLY_PREFIX_RE.match(subject):
-        return subject
-    return f"Re: {subject}"
-
-
 def _is_email_reaction(payload: Mapping[str, Any]) -> bool:
     """Return True if a message payload is a Gmail emoji reaction."""
     return payload.get("mimeType") == EMAIL_REACTION_MIME_TYPE or any(
@@ -1122,10 +1104,23 @@ def _build_forward_content(
     return subject, forward_plain, forward_html
 
 
+_REPLY_PREFIX_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)*re\s*:", re.IGNORECASE)
+
+
 def _reply_subject(subject: str, in_reply_to: Optional[str]) -> str:
-    """Prefix ``Re:`` onto a reply's subject unless it already carries one."""
-    if in_reply_to and not subject.lower().startswith("re:"):
+    """Prefix ``Re:`` onto a reply's subject unless one follows any ``[tag]`` prefixes."""
+    if in_reply_to and not _REPLY_PREFIX_RE.match(subject):
         return f"Re: {subject}"
+    return subject
+
+
+def _inherit_reply_subject(thread_id: str, target: Optional[Mapping[str, Any]]) -> str:
+    """Return the replied-to message's subject, raising when it has none."""
+    subject = (target or {}).get("subject") or ""
+    if not subject.strip():
+        raise UserInputError(
+            f"Could not inherit a subject from thread '{thread_id}'. Pass 'subject' explicitly."
+        )
     return subject
 
 
