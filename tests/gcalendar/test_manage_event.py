@@ -16,11 +16,13 @@ from pydantic import TypeAdapter
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from core.utils import UserInputError, handle_http_errors
-from gcalendar.calendar_tools import (
+from gcalendar.calendar_helpers import (
     _build_addon_conference_data,
+    _resolve_conference_data,
+)
+from gcalendar.calendar_tools import (
     _create_event_impl,
     _modify_event_impl,
-    _resolve_conference_data,
     manage_event,
 )
 
